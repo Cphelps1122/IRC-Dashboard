@@ -23,13 +23,38 @@ def load_data():
             return pd.DataFrame()
 
         # ---------------------------------------------------------
-        # LOAD THE CORRECT TAB FOR THIS CLIENT
+        # LOAD THE PROPERTY TAB
         # ---------------------------------------------------------
         df = pd.read_excel(
             io.BytesIO(r.content),
-            sheet_name="Property",   # <-- Your tab name
+            sheet_name="Property",
             engine="openpyxl"
         )
+
+        # ---------------------------------------------------------
+        # CLEAN + STANDARDIZE COLUMNS
+        # ---------------------------------------------------------
+        df.columns = df.columns.str.strip()
+
+        # Convert date columns
+        date_cols = ["Billing Date", "Due Date"]
+        for col in date_cols:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+
+        # Convert numeric columns
+        numeric_cols = [
+            "# Treatments",
+            "Number Days Billed",
+            "Previous Reading",
+            "Current Reading",
+            "Usage",
+            "$ Amount"
+        ]
+
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
 
         return df
 
