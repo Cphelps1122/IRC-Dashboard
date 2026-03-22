@@ -1,57 +1,38 @@
 import pandas as pd
-from pathlib import Path
+import streamlit as st
+import io
+import requests
 
-def load_property_ledger():
-    data_folder = Path("data")
+@st.cache_data(ttl=60)
+def load_data():
+    # ---------------------------------------------------------
+    # 1. INSERT YOUR GOOGLE SHEETS FILE ID HERE
+    # ---------------------------------------------------------
+    file_id = "PUT_NEW_CLIENT_FILE_ID_HERE"
 
-    excel_files = list(data_folder.glob("*.xlsx"))
-    if not excel_files:
-        return None, None
+    # Direct Excel export link
+    url = f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx"
 
-    newest_file = max(excel_files, key=lambda f: f.stat().st_mtime)
+    try:
+        # Download the Excel file
+        r = requests.get(url, timeout=10)
 
-    df = pd.read_excel(newest_file, sheet_name="Raw Data")
+        # If Google returns HTML instead of Excel
+        if r.text.startswith("<"):
+            st.error("❌ Google Sheets returned HTML instead of Excel. Make sure sharing is set to 'Anyone with the link can view'.")
+            return pd.DataFrame()
 
-    # -----------------------------
-    # CORE CLEANUP
-    # -----------------------------
-    if "Billing Date" in df.columns:
-        df["Billing Date"] = pd.to_datetime(df["Billing Date"], errors="coerce")
+        # ---------------------------------------------------------
+        # 2. LOAD THE CORRECT TAB FOR THIS CLIENT
+        # ---------------------------------------------------------
+        df = pd.read_excel(
+            io.BytesIO(r.content),
+            sheet_name="Property",   # <-- Your tab name
+            engine="openpyxl"
+        )
 
-    # Ensure Year / Month exist
-    if "Year" not in df.columns and "Billing Date" in df.columns:
-        df["Year"] = df["Billing Date"].dt.year
+        return df
 
-    if "Month" not in df.columns and "Billing Date" in df.columns:
-        df["Month"] = df["Billing Date"].dt.month_name()
-
-    if "Billing Date" in df.columns:
-        df["Month_Num"] = df["Billing Date"].dt.month
-    else:
-        df["Month_Num"] = pd.NA
-
-    # -----------------------------
-    # DERIVED METRICS
-    # -----------------------------
-    if "Usage" in df.columns and "$ Amount" in df.columns:
-        df["Cost_per_Unit"] = df["$ Amount"] / df["Usage"].replace(0, pd.NA)
-
-    if "Occupied Rooms" in df.columns and "$ Amount" in df.columns:
-        df["CPOR"] = df["$ Amount"] / df["Occupied Rooms"].replace(0, pd.NA)
-
-    if "# Units" in df.columns and "$ Amount" in df.columns:
-        df["CPAR"] = df["$ Amount"] / df["# Units"].replace(0, pd.NA)
-
-    if "Usage" in df.columns and "Occupied Rooms" in df.columns:
-        df["Usage_per_Occupied_Room"] = df["Usage"] / df["Occupied Rooms"].replace(0, pd.NA)
-
-    if "Usage" in df.columns and "# Units" in df.columns:
-        df["Usage_per_Available_Room"] = df["Usage"] / df["# Units"].replace(0, pd.NA)
-
-    month_order = (
-        sorted(df["Month_Num"].dropna().unique())
-        if "Month_Num" in df.columns
-        else None
-    )
-
-    return df, month_order
+    except Exception as e:
+        st.error(f"❌ Failed to load Excel file: {e}")
+        return pd.DataFrame()
