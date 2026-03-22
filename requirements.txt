@@ -1,0 +1,10 @@
+streamlit
+pandas
+numpy
+altair
+pydeck
+prophet
+cmdstanpy
+openpyxl
+geopy
+requests
