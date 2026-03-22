@@ -6,9 +6,9 @@ import requests
 @st.cache_data(ttl=60)
 def load_data():
     # ---------------------------------------------------------
-    # 1. INSERT YOUR GOOGLE SHEETS FILE ID HERE
+    # GOOGLE SHEETS FILE ID FOR THIS CLIENT
     # ---------------------------------------------------------
-    file_id = "PUT_NEW_CLIENT_FILE_ID_HERE"
+    file_id = "1_4coHOmEkzY9cLYRtqmnUJ51LuqeY6yz"
 
     # Direct Excel export link
     url = f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx"
@@ -23,7 +23,7 @@ def load_data():
             return pd.DataFrame()
 
         # ---------------------------------------------------------
-        # 2. LOAD THE CORRECT TAB FOR THIS CLIENT
+        # LOAD THE CORRECT TAB FOR THIS CLIENT
         # ---------------------------------------------------------
         df = pd.read_excel(
             io.BytesIO(r.content),
