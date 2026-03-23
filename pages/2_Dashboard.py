@@ -1,5 +1,5 @@
 import streamlit as st
-from load_data import load_data
+from utils.load_data import load_data
 
 st.set_page_config(page_title="Dashboard", layout="wide")
 
