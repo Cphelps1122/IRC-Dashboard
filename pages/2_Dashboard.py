@@ -1,6 +1,8 @@
 import streamlit as st
 from utils.load_data import load_data
 import pandas as pd
+from auth import require_auth
+require_auth()
 
 st.set_page_config(page_title="Dashboard", layout="wide")
 
