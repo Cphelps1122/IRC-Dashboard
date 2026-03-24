@@ -3,14 +3,14 @@ from auth import require_auth
 from utils.load_data import load_data
 import pandas as pd
 import pydeck as pdk
-from geopy.geocoders import Nominatim
+from geopy.geocoders import ArcGIS
 from geopy.extra.rate_limiter import RateLimiter
 
 require_auth()
 st.set_page_config(page_title="Property Map", layout="wide")
 
 st.markdown("## Property Map")
-st.write("Visualizing all properties using enhanced geocoding (dialysis center matching).")
+st.write("Accurate facility-level geocoding using ArcGIS (no API key required).")
 
 df, last_updated = load_data()
 
@@ -21,7 +21,6 @@ if df.empty:
 # ---------------------------------------------------------
 # BUILD ENHANCED ADDRESS FOR GEOCODING
 # ---------------------------------------------------------
-# Adding "dialysis center" dramatically improves accuracy
 df["Full Address"] = (
     df["Property Name"] + ", " +
     df["City"] + ", " +
@@ -29,11 +28,11 @@ df["Full Address"] = (
 )
 
 # ---------------------------------------------------------
-# GEOCODER (with caching)
+# ARC GIS GEOCODER (cached)
 # ---------------------------------------------------------
 @st.cache_data(show_spinner=True)
-def geocode_addresses(address_list):
-    geolocator = Nominatim(user_agent="irc_dashboard")
+def geocode_arcgis(address_list):
+    geolocator = ArcGIS(timeout=10)
     geocode = RateLimiter(geolocator.geocode, min_delay_seconds=1)
 
     results = {}
@@ -48,8 +47,7 @@ def geocode_addresses(address_list):
             results[addr] = (None, None)
     return results
 
-unique_addresses = df["Full Address"].unique()
-coords = geocode_addresses(unique_addresses)
+coords = geocode_arcgis(df["Full Address"].unique())
 
 df["Latitude"] = df["Full Address"].apply(lambda x: coords[x][0])
 df["Longitude"] = df["Full Address"].apply(lambda x: coords[x][1])
@@ -73,7 +71,7 @@ else:
     highlight_df = map_df
 
 # ---------------------------------------------------------
-# SAFE VIEWPORT
+# VIEWPORT
 # ---------------------------------------------------------
 view_state = pdk.ViewState(
     latitude=map_df["Latitude"].mean(),
@@ -85,7 +83,6 @@ view_state = pdk.ViewState(
 # ---------------------------------------------------------
 # MAP LAYERS
 # ---------------------------------------------------------
-# Base layer (all properties)
 layer = pdk.Layer(
     "ScatterplotLayer",
     data=map_df,
@@ -95,7 +92,6 @@ layer = pdk.Layer(
     pickable=True,
 )
 
-# Highlight layer (selected property)
 highlight_layer = pdk.Layer(
     "ScatterplotLayer",
     data=highlight_df,
@@ -114,7 +110,7 @@ tooltip = {
 }
 
 # ---------------------------------------------------------
-# RENDER MAP (CARTO BASEMAP — NO TOKEN REQUIRED)
+# RENDER MAP (CARTO BASEMAP — FREE)
 # ---------------------------------------------------------
 st.pydeck_chart(
     pdk.Deck(
