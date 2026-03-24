@@ -3,17 +3,11 @@ from auth import require_auth
 from utils.load_data import load_data
 import pandas as pd
 import pydeck as pdk
-import os
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 
 require_auth()
 st.set_page_config(page_title="Property Map", layout="wide")
-
-# ---------------------------------------------------------
-# MAPBOX TOKEN (REQUIRED)
-# ---------------------------------------------------------
-os.environ["MAPBOX_API_KEY"] = st.secrets.get("MAPBOX_API_KEY", "")
 
 st.markdown("## Property Map")
 st.write("Visualizing all properties using City + State geocoding.")
@@ -24,11 +18,13 @@ if df.empty:
     st.warning("No data available.")
     st.stop()
 
-# Build full address
+# ---------------------------------------------------------
+# BUILD FULL ADDRESS FOR GEOCODING
+# ---------------------------------------------------------
 df["Full Address"] = df["Property Name"] + ", " + df["City"] + ", " + df["State"]
 
 # ---------------------------------------------------------
-# GEOCODING (cached)
+# GEOCODER (with caching)
 # ---------------------------------------------------------
 @st.cache_data(show_spinner=True)
 def geocode_addresses(address_list):
@@ -47,12 +43,13 @@ def geocode_addresses(address_list):
             results[addr] = (None, None)
     return results
 
-coords = geocode_addresses(df["Full Address"].unique())
+unique_addresses = df["Full Address"].unique()
+coords = geocode_addresses(unique_addresses)
 
 df["Latitude"] = df["Full Address"].apply(lambda x: coords[x][0])
 df["Longitude"] = df["Full Address"].apply(lambda x: coords[x][1])
 
-# Remove invalid coordinates
+# Drop properties that failed geocoding
 map_df = df.dropna(subset=["Latitude", "Longitude"]).copy()
 
 if map_df.empty:
@@ -60,37 +57,67 @@ if map_df.empty:
     st.stop()
 
 # ---------------------------------------------------------
+# SIDEBAR FILTERS
+# ---------------------------------------------------------
+properties = sorted(map_df["Property Name"].unique())
+selected_property = st.selectbox("Highlight Property", ["All Properties"] + properties)
+
+if selected_property != "All Properties":
+    highlight_df = map_df[map_df["Property Name"] == selected_property]
+else:
+    highlight_df = map_df
+
+# ---------------------------------------------------------
 # SAFE VIEWPORT (prevents white screen)
 # ---------------------------------------------------------
 view_state = pdk.ViewState(
-    latitude=map_df["Latitude"].mean() if not map_df.empty else 39.5,
-    longitude=map_df["Longitude"].mean() if not map_df.empty else -98.35,
+    latitude=map_df["Latitude"].mean(),
+    longitude=map_df["Longitude"].mean(),
     zoom=4,
     pitch=0,
 )
 
 # ---------------------------------------------------------
-# LAYERS
+# MAP LAYERS
 # ---------------------------------------------------------
+# Base layer (all properties)
 layer = pdk.Layer(
     "ScatterplotLayer",
     data=map_df,
     get_position=["Longitude", "Latitude"],
     get_radius=30000,
-    get_color=[0, 122, 255, 160],
+    get_color=[0, 122, 255, 160],  # blue
     pickable=True,
 )
 
+# Highlight layer (selected property)
+highlight_layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=highlight_df,
+    get_position=["Longitude", "Latitude"],
+    get_radius=60000,
+    get_color=[255, 0, 0, 200],  # red
+    pickable=True,
+)
+
+# ---------------------------------------------------------
+# TOOLTIP
+# ---------------------------------------------------------
 tooltip = {
     "html": "<b>{Property Name}</b><br/>{City}, {State}",
     "style": {"backgroundColor": "steelblue", "color": "white"},
 }
 
+# ---------------------------------------------------------
+# RENDER MAP (CARTO BASEMAP — FIXES WHITE SCREEN)
+# ---------------------------------------------------------
 st.pydeck_chart(
     pdk.Deck(
-        layers=[layer],
+        layers=[layer, highlight_layer],
         initial_view_state=view_state,
         tooltip=tooltip,
-        map_style="mapbox://styles/mapbox/light-v9",
+        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
     )
 )
+
+st.caption("Blue = all properties, Red = highlighted property.")
