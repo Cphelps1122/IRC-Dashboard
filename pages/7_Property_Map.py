@@ -10,7 +10,7 @@ require_auth()
 st.set_page_config(page_title="Property Map", layout="wide")
 
 st.markdown("## Property Map")
-st.write("Visualizing all properties using City + State geocoding.")
+st.write("Visualizing all properties using enhanced geocoding (dialysis center matching).")
 
 df, last_updated = load_data()
 
@@ -19,9 +19,14 @@ if df.empty:
     st.stop()
 
 # ---------------------------------------------------------
-# BUILD FULL ADDRESS FOR GEOCODING
+# BUILD ENHANCED ADDRESS FOR GEOCODING
 # ---------------------------------------------------------
-df["Full Address"] = df["Property Name"] + ", " + df["City"] + ", " + df["State"]
+# Adding "dialysis center" dramatically improves accuracy
+df["Full Address"] = (
+    df["Property Name"] + ", " +
+    df["City"] + ", " +
+    df["State"] + ", dialysis center"
+)
 
 # ---------------------------------------------------------
 # GEOCODER (with caching)
@@ -68,7 +73,7 @@ else:
     highlight_df = map_df
 
 # ---------------------------------------------------------
-# SAFE VIEWPORT (prevents white screen)
+# SAFE VIEWPORT
 # ---------------------------------------------------------
 view_state = pdk.ViewState(
     latitude=map_df["Latitude"].mean(),
@@ -109,7 +114,7 @@ tooltip = {
 }
 
 # ---------------------------------------------------------
-# RENDER MAP (CARTO BASEMAP — FIXES WHITE SCREEN)
+# RENDER MAP (CARTO BASEMAP — NO TOKEN REQUIRED)
 # ---------------------------------------------------------
 st.pydeck_chart(
     pdk.Deck(
