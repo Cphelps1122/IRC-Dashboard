@@ -3,11 +3,17 @@ from auth import require_auth
 from utils.load_data import load_data
 import pandas as pd
 import pydeck as pdk
+import os
 from geopy.geocoders import Nominatim
 from geopy.extra.rate_limiter import RateLimiter
 
 require_auth()
 st.set_page_config(page_title="Property Map", layout="wide")
+
+# ---------------------------------------------------------
+# MAPBOX TOKEN (REQUIRED)
+# ---------------------------------------------------------
+os.environ["MAPBOX_API_KEY"] = st.secrets.get("MAPBOX_API_KEY", "")
 
 st.markdown("## Property Map")
 st.write("Visualizing all properties using City + State geocoding.")
@@ -18,13 +24,11 @@ if df.empty:
     st.warning("No data available.")
     st.stop()
 
-# ---------------------------------------------------------
-# BUILD FULL ADDRESS FOR GEOCODING
-# ---------------------------------------------------------
+# Build full address
 df["Full Address"] = df["Property Name"] + ", " + df["City"] + ", " + df["State"]
 
 # ---------------------------------------------------------
-# GEOCODER (with caching)
+# GEOCODING (cached)
 # ---------------------------------------------------------
 @st.cache_data(show_spinner=True)
 def geocode_addresses(address_list):
@@ -43,13 +47,12 @@ def geocode_addresses(address_list):
             results[addr] = (None, None)
     return results
 
-unique_addresses = df["Full Address"].unique()
-coords = geocode_addresses(unique_addresses)
+coords = geocode_addresses(df["Full Address"].unique())
 
 df["Latitude"] = df["Full Address"].apply(lambda x: coords[x][0])
 df["Longitude"] = df["Full Address"].apply(lambda x: coords[x][1])
 
-# Drop properties that failed geocoding
+# Remove invalid coordinates
 map_df = df.dropna(subset=["Latitude", "Longitude"]).copy()
 
 if map_df.empty:
@@ -57,18 +60,17 @@ if map_df.empty:
     st.stop()
 
 # ---------------------------------------------------------
-# SIDEBAR FILTERS
+# SAFE VIEWPORT (prevents white screen)
 # ---------------------------------------------------------
-properties = sorted(map_df["Property Name"].unique())
-selected_property = st.selectbox("Highlight Property", ["All Properties"] + properties)
-
-if selected_property != "All Properties":
-    highlight_df = map_df[map_df["Property Name"] == selected_property]
-else:
-    highlight_df = map_df
+view_state = pdk.ViewState(
+    latitude=map_df["Latitude"].mean() if not map_df.empty else 39.5,
+    longitude=map_df["Longitude"].mean() if not map_df.empty else -98.35,
+    zoom=4,
+    pitch=0,
+)
 
 # ---------------------------------------------------------
-# MAP LAYER
+# LAYERS
 # ---------------------------------------------------------
 layer = pdk.Layer(
     "ScatterplotLayer",
@@ -79,22 +81,6 @@ layer = pdk.Layer(
     pickable=True,
 )
 
-highlight_layer = pdk.Layer(
-    "ScatterplotLayer",
-    data=highlight_df,
-    get_position=["Longitude", "Latitude"],
-    get_radius=60000,
-    get_color=[255, 0, 0, 200],
-    pickable=True,
-)
-
-view_state = pdk.ViewState(
-    latitude=map_df["Latitude"].mean(),
-    longitude=map_df["Longitude"].mean(),
-    zoom=4,
-    pitch=0,
-)
-
 tooltip = {
     "html": "<b>{Property Name}</b><br/>{City}, {State}",
     "style": {"backgroundColor": "steelblue", "color": "white"},
@@ -102,11 +88,9 @@ tooltip = {
 
 st.pydeck_chart(
     pdk.Deck(
-        layers=[layer, highlight_layer],
+        layers=[layer],
         initial_view_state=view_state,
         tooltip=tooltip,
         map_style="mapbox://styles/mapbox/light-v9",
     )
 )
-
-st.caption("Blue = all properties, Red = highlighted property.")
