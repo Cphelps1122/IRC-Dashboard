@@ -10,7 +10,7 @@ require_auth()
 st.set_page_config(page_title="Property Map", layout="wide")
 
 st.markdown("## Property Map")
-st.write("Accurate facility-level geocoding using ArcGIS (no API key required).")
+st.write("Mapping all properties using full address geocoding (Street, City, State, Zip).")
 
 df, last_updated = load_data()
 
@@ -19,12 +19,13 @@ if df.empty:
     st.stop()
 
 # ---------------------------------------------------------
-# BUILD ENHANCED ADDRESS FOR GEOCODING
+# BUILD FULL ADDRESS FOR GEOCODING
 # ---------------------------------------------------------
 df["Full Address"] = (
-    df["Property Name"] + ", " +
+    df["Street"] + ", " +
     df["City"] + ", " +
-    df["State"] + ", dialysis center"
+    df["State"] + " " +
+    df["Zip Code"].astype(str)
 )
 
 # ---------------------------------------------------------
@@ -105,7 +106,7 @@ highlight_layer = pdk.Layer(
 # TOOLTIP
 # ---------------------------------------------------------
 tooltip = {
-    "html": "<b>{Property Name}</b><br/>{City}, {State}",
+    "html": "<b>{Property Name}</b><br/>{Street}<br/>{City}, {State} {Zip Code}",
     "style": {"backgroundColor": "steelblue", "color": "white"},
 }
 
