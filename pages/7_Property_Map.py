@@ -10,7 +10,7 @@ require_auth()
 st.set_page_config(page_title="Property Map", layout="wide")
 
 st.markdown("## Property Map")
-st.write("Mapping all properties using full address geocoding (Street, City, State, Zip).")
+st.write("Mapping all properties using full address geocoding with zoom‑adaptive marker sizes.")
 
 df, last_updated = load_data()
 
@@ -82,14 +82,25 @@ view_state = pdk.ViewState(
 )
 
 # ---------------------------------------------------------
+# ZOOM‑ADAPTIVE RADIUS EXPRESSIONS
+# ---------------------------------------------------------
+# Base radius shrinks as zoom increases
+base_radius_expr = "8000 / (2 ** (zoom - 4))"
+
+# Highlight radius stays larger but still adaptive
+highlight_radius_expr = "15000 / (2 ** (zoom - 4))"
+
+# ---------------------------------------------------------
 # MAP LAYERS
 # ---------------------------------------------------------
 layer = pdk.Layer(
     "ScatterplotLayer",
     data=map_df,
     get_position=["Longitude", "Latitude"],
-    get_radius=30000,
-    get_color=[0, 122, 255, 160],  # blue
+    get_radius=base_radius_expr,
+    radius_min_pixels=3,
+    radius_max_pixels=40,
+    get_color=[0, 122, 255, 160],
     pickable=True,
 )
 
@@ -97,8 +108,10 @@ highlight_layer = pdk.Layer(
     "ScatterplotLayer",
     data=highlight_df,
     get_position=["Longitude", "Latitude"],
-    get_radius=60000,
-    get_color=[255, 0, 0, 200],  # red
+    get_radius=highlight_radius_expr,
+    radius_min_pixels=5,
+    radius_max_pixels=60,
+    get_color=[255, 0, 0, 200],
     pickable=True,
 )
 
@@ -122,4 +135,4 @@ st.pydeck_chart(
     )
 )
 
-st.caption("Blue = all properties, Red = highlighted property.")
+st.caption("Blue = all properties, Red = highlighted property. Marker size adapts to zoom level.")
