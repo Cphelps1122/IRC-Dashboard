@@ -10,7 +10,7 @@ require_auth()
 st.set_page_config(page_title="Property Map", layout="wide")
 
 st.markdown("## Property Map")
-st.write("Mapping all properties using full address geocoding with zoom‑adaptive marker sizes.")
+st.write("Mapping all properties using full address geocoding with adaptive marker sizes.")
 
 df, last_updated = load_data()
 
@@ -82,57 +82,10 @@ view_state = pdk.ViewState(
 )
 
 # ---------------------------------------------------------
-# ZOOM‑ADAPTIVE RADIUS EXPRESSIONS
-# ---------------------------------------------------------
-# Base radius shrinks as zoom increases
-base_radius_expr = "8000 / (2 ** (zoom - 4))"
-
-# Highlight radius stays larger but still adaptive
-highlight_radius_expr = "15000 / (2 ** (zoom - 4))"
-
-# ---------------------------------------------------------
-# MAP LAYERS
+# MAP LAYERS (Zoom‑adaptive using radius_min/max_pixels)
 # ---------------------------------------------------------
 layer = pdk.Layer(
     "ScatterplotLayer",
     data=map_df,
     get_position=["Longitude", "Latitude"],
-    get_radius=base_radius_expr,
-    radius_min_pixels=3,
-    radius_max_pixels=40,
-    get_color=[0, 122, 255, 160],
-    pickable=True,
-)
-
-highlight_layer = pdk.Layer(
-    "ScatterplotLayer",
-    data=highlight_df,
-    get_position=["Longitude", "Latitude"],
-    get_radius=highlight_radius_expr,
-    radius_min_pixels=5,
-    radius_max_pixels=60,
-    get_color=[255, 0, 0, 200],
-    pickable=True,
-)
-
-# ---------------------------------------------------------
-# TOOLTIP
-# ---------------------------------------------------------
-tooltip = {
-    "html": "<b>{Property Name}</b><br/>{Street}<br/>{City}, {State} {Zip Code}",
-    "style": {"backgroundColor": "steelblue", "color": "white"},
-}
-
-# ---------------------------------------------------------
-# RENDER MAP (CARTO BASEMAP — FREE)
-# ---------------------------------------------------------
-st.pydeck_chart(
-    pdk.Deck(
-        layers=[layer, highlight_layer],
-        initial_view_state=view_state,
-        tooltip=tooltip,
-        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
-    )
-)
-
-st.caption("Blue = all properties, Red = highlighted property. Marker size adapts to zoom level.")
+    get_radius=2000,               # base radius
