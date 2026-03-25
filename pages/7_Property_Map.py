@@ -19,12 +19,22 @@ if df.empty:
     st.stop()
 
 # ---------------------------------------------------------
+# VERIFY REQUIRED COLUMNS EXIST
+# ---------------------------------------------------------
+required_cols = ["Street", "City", "State", "Zip Code", "Property Name"]
+missing = [c for c in required_cols if c not in df.columns]
+
+if missing:
+    st.error(f"Missing required columns: {missing}")
+    st.stop()
+
+# ---------------------------------------------------------
 # BUILD FULL ADDRESS FOR GEOCODING
 # ---------------------------------------------------------
 df["Full Address"] = (
-    df["Street"] + ", " +
-    df["City"] + ", " +
-    df["State"] + " " +
+    df["Street"].astype(str) + ", " +
+    df["City"].astype(str) + ", " +
+    df["State"].astype(str) + " " +
     df["Zip Code"].astype(str)
 )
 
@@ -44,7 +54,7 @@ def geocode_arcgis(address_list):
                 results[addr] = (location.latitude, location.longitude)
             else:
                 results[addr] = (None, None)
-        except:
+        except Exception:
             results[addr] = (None, None)
     return results
 
@@ -89,3 +99,43 @@ layer = pdk.Layer(
     data=map_df,
     get_position=["Longitude", "Latitude"],
     get_radius=2000,               # base radius
+    radius_scale=1,
+    radius_min_pixels=3,           # shrinks when zoomed in
+    radius_max_pixels=40,          # grows when zoomed out
+    get_color=[0, 122, 255, 160],
+    pickable=True,
+)
+
+highlight_layer = pdk.Layer(
+    "ScatterplotLayer",
+    data=highlight_df,
+    get_position=["Longitude", "Latitude"],
+    get_radius=4000,               # highlight radius
+    radius_scale=1,
+    radius_min_pixels=5,
+    radius_max_pixels=60,
+    get_color=[255, 0, 0, 200],
+    pickable=True,
+)
+
+# ---------------------------------------------------------
+# TOOLTIP
+# ---------------------------------------------------------
+tooltip = {
+    "html": "<b>{Property Name}</b><br/>{Street}<br/>{City}, {State} {Zip Code}",
+    "style": {"backgroundColor": "steelblue", "color": "white"},
+}
+
+# ---------------------------------------------------------
+# RENDER MAP (CARTO BASEMAP — FREE)
+# ---------------------------------------------------------
+st.pydeck_chart(
+    pdk.Deck(
+        layers=[layer, highlight_layer],
+        initial_view_state=view_state,
+        tooltip=tooltip,
+        map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
+    )
+)
+
+st.caption("Blue = all properties, Red = highlighted property. Marker size adapts to zoom level.")
