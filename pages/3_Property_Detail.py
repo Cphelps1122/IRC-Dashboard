@@ -2,6 +2,10 @@ import streamlit as st
 from auth import require_auth
 from utils.load_data import load_data
 import pandas as pd
+from components.property_summary import render_property_summary
+
+render_property_summary(df, selected_property)
+
 
 require_auth()
 st.set_page_config(page_title="Property Detail", layout="wide")
