@@ -2,15 +2,7 @@ import streamlit as st
 import pandas as pd
 
 from components.property_summary import render_property_summary
-
-
-# ---------------------------------------------------------
-# Load Data
-# ---------------------------------------------------------
-@st.cache_data
-def load_data():
-    # Replace with your actual data source
-    return pd.read_csv("data/utility_data.csv")
+from load_data import load_data   # <-- uses your real Google Sheets loader
 
 
 # ---------------------------------------------------------
@@ -18,15 +10,19 @@ def load_data():
 # ---------------------------------------------------------
 st.title("Property Detail")
 
-df = load_data()
+# Load Google Sheets data + last updated timestamp
+df, last_updated = load_data()
 
 # Ensure Billing Date is datetime
-df["Billing Date"] = pd.to_datetime(df["Billing Date"], errors="coerce")
+if "Billing Date" in df.columns:
+    df["Billing Date"] = pd.to_datetime(df["Billing Date"], errors="coerce")
 
 # Property selector
 properties = sorted(df["Property Name"].dropna().unique())
 selected_property = st.selectbox("Select Property", properties)
 
+# Last updated info
+st.caption(f"Last updated: {last_updated}")
 
 # ---------------------------------------------------------
 # Render Summary Component
