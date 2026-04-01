@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 
 # Import your Google Sheets loader from util/
-from util.load_data import load_data
+from utils.load_data import load_data
 
 # Import your summary component
 from components.property_summary import render_property_summary
