@@ -6,6 +6,78 @@ from utils.load_data import load_data
 
 
 # ---------------------------------------------------------
+# GLOBAL PREMIUM CSS
+# ---------------------------------------------------------
+st.markdown("""
+<style>
+
+.property-card {
+    background: #ffffff;
+    border-radius: 14px;
+    border: 1px solid #e5e5e5;
+    padding: 0;
+    height: 320px;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.06);
+    overflow: hidden;
+    transition: all 0.15s ease;
+}
+
+.property-card:hover {
+    box-shadow: 0 6px 16px rgba(0,0,0,0.12);
+    transform: translateY(-2px);
+}
+
+.property-card-header {
+    background: #f5f7fa;
+    padding: 14px 18px;
+    border-bottom: 1px solid #e2e2e2;
+    font-size: 17px;
+    font-weight: 700;
+    color: #1a1a1a;
+}
+
+.property-card-body {
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+
+.property-total {
+    font-size: 30px;
+    font-weight: 800;
+    color: #000;
+    margin-bottom: 6px;
+}
+
+.yoy-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 12px;
+}
+
+.utility-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 14px;
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.utility-row:last-child {
+    border-bottom: none;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------
 # Formatting Helpers
 # ---------------------------------------------------------
 def fmt_currency(x):
@@ -14,15 +86,6 @@ def fmt_currency(x):
     return f"${x:,.0f}"
 
 
-def fmt_pct(x):
-    if pd.isna(x):
-        return "—"
-    return f"{x:+.0f}%"
-
-
-# ---------------------------------------------------------
-# YoY Calculation
-# ---------------------------------------------------------
 def compute_yoy(df, start_date, end_date):
     curr = df[(df["Billing Date"] >= start_date) & (df["Billing Date"] <= end_date)]["$ Amount"].sum()
 
@@ -38,7 +101,7 @@ def compute_yoy(df, start_date, end_date):
 
 
 # ---------------------------------------------------------
-# Property Card (Hybrid Style)
+# PREMIUM PROPERTY CARD
 # ---------------------------------------------------------
 def property_card(df_prop, start_date, end_date):
     df_period = df_prop[
@@ -81,7 +144,7 @@ def property_card(df_prop, start_date, end_date):
     # Utility rows
     util_html = "".join(
         f"""
-        <div style='display:flex; justify-content:space-between; margin-bottom:6px;'>
+        <div class="utility-row">
             <span style="color:#444; font-weight:500;">{u}</span>
             <span style="font-weight:600;">{fmt_currency(v)}</span>
         </div>
@@ -89,49 +152,29 @@ def property_card(df_prop, start_date, end_date):
         for u, v in utilities.items()
     )
 
-    # Card HTML
+    # Final card HTML
     st.markdown(
         f"""
-        <div style="
-            background: #ffffff;
-            border-radius: 14px;
-            border: 1px solid #e2e2e2;
-            padding: 20px;
-            height: 280px;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.06);
-        ">
+        <div class="property-card">
 
-            <!-- Property Name -->
-            <div style="font-size: 18px; font-weight: 700; color:#222; margin-bottom: 4px;">
+            <div class="property-card-header">
                 {df_prop['Property Name'].iloc[0]}
             </div>
 
-            <!-- Total Cost -->
-            <div style="font-size: 30px; font-weight: 800; color:#000; margin-bottom: 6px;">
-                {fmt_currency(total_cost)}
-            </div>
+            <div class="property-card-body">
 
-            <!-- YoY Badge -->
-            <div style="
-                display:inline-block;
-                padding: 4px 12px;
-                border-radius: 8px;
-                background: {yoy_bg};
-                color: {yoy_color};
-                font-size: 13px;
-                font-weight: 700;
-                width: fit-content;
-                margin-bottom: 10px;
-            ">
-                {yoy_arrow} {yoy_text} YoY
-            </div>
+                <div>
+                    <div class="property-total">{fmt_currency(total_cost)}</div>
 
-            <!-- Utility Breakdown -->
-            <div style="font-size: 14px; line-height: 1.4; margin-top: 6px;">
-                {util_html}
+                    <div class="yoy-badge" style="background:{yoy_bg}; color:{yoy_color};">
+                        {yoy_arrow} {yoy_text} YoY
+                    </div>
+                </div>
+
+                <div>
+                    {util_html}
+                </div>
+
             </div>
 
         </div>
@@ -141,7 +184,7 @@ def property_card(df_prop, start_date, end_date):
 
 
 # ---------------------------------------------------------
-# Main Page
+# MAIN PAGE
 # ---------------------------------------------------------
 st.title("Property Portfolio Overview")
 
