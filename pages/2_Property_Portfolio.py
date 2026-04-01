@@ -1,8 +1,11 @@
 import streamlit as st
-import math
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from utils.load_data import load_data
 
 # ================================================================
-# PAGE CONFIG — Must be the first Streamlit call
+# PAGE CONFIG
 # ================================================================
 st.set_page_config(
     page_title="Property Portfolio",
@@ -12,108 +15,145 @@ st.set_page_config(
 )
 
 # ================================================================
-# SAMPLE DATA — Replace this list with your Google Sheets pull.
-# Each dict = one property card.  Field names are referenced in
-# the card-builder below, so keep keys consistent if you rename.
+# LOAD LIVE DATA FROM GOOGLE SHEETS
+# Uses your existing utils/load_data.py → returns (df, timestamp)
 # ================================================================
-PORTFOLIO = [
-    {
-        "id": "prop-001",
-        "name": "Lakewood Commons",
-        "address": "1420 Lakewood Blvd, Melissa, TX 75454",
-        "status": "Active",
-        "revenue": 18400,
-        "expenses": 6200,
-        "occupancy": 96,
-        "noi": 12200,
-        "cap_rate": 7.2,
-        "yoy_change": 4.8,
-        "revenue_history": [14200,14800,15400,15200,16000,16500,17000,16800,17200,17800,18000,18400],
-        "last_updated": "2026-03-31",
-    },
-    {
-        "id": "prop-002",
-        "name": "Ridgepoint Offices",
-        "address": "820 Commerce Dr, McKinney, TX 75071",
-        "status": "Active",
-        "revenue": 32750,
-        "expenses": 11400,
-        "occupancy": 91,
-        "noi": 21350,
-        "cap_rate": 6.8,
-        "yoy_change": 2.1,
-        "revenue_history": [28000,29200,29800,30100,30500,31000,31200,31800,32000,32100,32500,32750],
-        "last_updated": "2026-03-30",
-    },
-    {
-        "id": "prop-003",
-        "name": "Elm Street Retail Center",
-        "address": "305 Elm St, Anna, TX 75409",
-        "status": "Pending",
-        "revenue": 9800,
-        "expenses": 4100,
-        "occupancy": 78,
-        "noi": 5700,
-        "cap_rate": 5.4,
-        "yoy_change": -1.3,
-        "revenue_history": [10500,10200,9800,10000,9600,9900,9700,9500,9800,9600,9700,9800],
-        "last_updated": "2026-03-29",
-    },
-    {
-        "id": "prop-004",
-        "name": "Sunset Apartments",
-        "address": "7700 Sunset Ridge Pkwy, Frisco, TX 75035",
-        "status": "Active",
-        "revenue": 54200,
-        "expenses": 19800,
-        "occupancy": 94,
-        "noi": 34400,
-        "cap_rate": 6.1,
-        "yoy_change": 5.6,
-        "revenue_history": [44000,45500,46200,47800,48500,49200,50000,51200,52000,52800,53400,54200],
-        "last_updated": "2026-03-31",
-    },
-    {
-        "id": "prop-005",
-        "name": "Northgate Industrial",
-        "address": "1100 Industrial Blvd, Princeton, TX 75407",
-        "status": "Vacant",
-        "revenue": 0,
-        "expenses": 3200,
-        "occupancy": 0,
-        "noi": -3200,
-        "cap_rate": 0,
-        "yoy_change": -100,
-        "revenue_history": [8200,7500,6800,5400,4000,2800,1500,800,0,0,0,0],
-        "last_updated": "2026-03-28",
-    },
-    {
-        "id": "prop-006",
-        "name": "Heritage Plaza",
-        "address": "490 Heritage Pkwy, Celina, TX 75009",
-        "status": "Active",
-        "revenue": 22100,
-        "expenses": 7600,
-        "occupancy": 88,
-        "noi": 14500,
-        "cap_rate": 7.9,
-        "yoy_change": 3.4,
-        "revenue_history": [18500,19000,19200,19800,20100,20400,20800,21000,21300,21500,21800,22100],
-        "last_updated": "2026-03-31",
-    },
+df, last_updated = load_data()
+
+if df.empty:
+    st.error("No data returned from Google Sheets.")
+    st.stop()
+
+# ================================================================
+# COLUMN DETECTION — Finds your property name column automatically.
+# If your column is named something else, add it to the list below.
+# ================================================================
+_prop_candidates = [
+    "Property Name", "Property", "Account", "Location",
+    "Site", "Address", "Building", "Facility", "Name",
 ]
+PROP_COL = None
+for candidate in _prop_candidates:
+    match = [c for c in df.columns if c.strip().lower() == candidate.lower()]
+    if match:
+        PROP_COL = match[0]
+        break
+
+if PROP_COL is None:
+    st.error(
+        f"⚠️ Could not auto-detect the property name column.\n\n"
+        f"**Your columns:** {list(df.columns)}\n\n"
+        f"Add your property column name to the `_prop_candidates` list near line 30."
+    )
+    st.stop()
+
+# Optional: detect a Utility type column (water, electric, gas, etc.)
+_util_candidates = ["Utility", "Utility Type", "Service", "Type", "Service Type"]
+UTIL_COL = None
+for candidate in _util_candidates:
+    match = [c for c in df.columns if c.strip().lower() == candidate.lower()]
+    if match:
+        UTIL_COL = match[0]
+        break
+
+# ================================================================
+# AGGREGATE BILLING DATA → One summary dict per property
+# This replaces the hardcoded PORTFOLIO list.
+# ================================================================
+now = pd.Timestamp.now()
+twelve_months_ago = now - pd.DateOffset(months=12)
+twentyfour_months_ago = now - pd.DateOffset(months=24)
+
+PORTFOLIO = []
+
+for prop_name, grp in df.groupby(PROP_COL):
+    grp = grp.sort_values("Billing Date")
+
+    # --- Total cost & usage (all time) ---
+    total_cost = grp["$ Amount"].sum() if "$ Amount" in grp.columns else 0
+    total_usage = grp["Usage"].sum() if "Usage" in grp.columns else 0
+    bill_count = len(grp)
+
+    # --- Last 12 months slice ---
+    recent = grp[grp["Billing Date"] >= twelve_months_ago] if "Billing Date" in grp.columns else grp
+    cost_12m = recent["$ Amount"].sum() if "$ Amount" in recent.columns else 0
+    avg_monthly = cost_12m / max(len(recent), 1)
+
+    # --- Prior 12 months slice (for YoY) ---
+    prior = grp[
+        (grp["Billing Date"] >= twentyfour_months_ago)
+        & (grp["Billing Date"] < twelve_months_ago)
+    ] if "Billing Date" in grp.columns else pd.DataFrame()
+    cost_prior = prior["$ Amount"].sum() if not prior.empty and "$ Amount" in prior.columns else 0
+
+    # --- YoY % change (cost going DOWN is good → green) ---
+    if cost_prior > 0:
+        yoy_change = round(((cost_12m - cost_prior) / cost_prior) * 100, 1)
+    else:
+        yoy_change = 0.0
+
+    # --- Monthly cost history for sparkline (last 12 months) ---
+    cost_history = []
+    if "Billing Date" in grp.columns and "$ Amount" in grp.columns:
+        recent_data = grp[grp["Billing Date"] >= twelve_months_ago].copy()
+        if not recent_data.empty:
+            recent_data["month"] = recent_data["Billing Date"].dt.to_period("M")
+            monthly = recent_data.groupby("month")["$ Amount"].sum().sort_index()
+            cost_history = monthly.tolist()
+    # Fallback: use all data if less than 2 months in range
+    if len(cost_history) < 2 and "$ Amount" in grp.columns:
+        grp_copy = grp.copy()
+        if "Billing Date" in grp_copy.columns:
+            grp_copy["month"] = grp_copy["Billing Date"].dt.to_period("M")
+            monthly = grp_copy.groupby("month")["$ Amount"].sum().sort_index()
+            cost_history = monthly.tolist()
+
+    # --- Status: Active if billed within 90 days, else Inactive ---
+    last_bill = grp["Billing Date"].max() if "Billing Date" in grp.columns else None
+    if pd.notna(last_bill):
+        days_since = (now - last_bill).days
+        if days_since <= 90:
+            status = "Active"
+        elif days_since <= 180:
+            status = "Pending"
+        else:
+            status = "Inactive"
+        last_bill_str = last_bill.strftime("%Y-%m-%d")
+    else:
+        status = "Unknown"
+        last_bill_str = "N/A"
+
+    # --- Utility types served ---
+    utilities = []
+    if UTIL_COL and UTIL_COL in grp.columns:
+        utilities = grp[UTIL_COL].dropna().unique().tolist()
+
+    PORTFOLIO.append({
+        "id": prop_name.lower().replace(" ", "-").replace("/", "-"),
+        "name": str(prop_name),
+        "status": status,
+        "total_cost": round(total_cost, 2),
+        "avg_monthly": round(avg_monthly, 2),
+        "total_usage": round(total_usage, 1),
+        "bill_count": bill_count,
+        "yoy_change": yoy_change,
+        "cost_history": cost_history,
+        "last_updated": last_bill_str,
+        "utilities": utilities,
+    })
+
+# Sort: Active first, then by total cost descending
+status_order = {"Active": 0, "Pending": 1, "Inactive": 2, "Unknown": 3}
+PORTFOLIO.sort(key=lambda p: (status_order.get(p["status"], 9), -p["total_cost"]))
 
 
 # ================================================================
-# GLOBAL CSS — Injected once.  Controls summary bar, cards,
-# sparklines, badges, hover effects, and responsive grid.
+# GLOBAL CSS
 # ================================================================
 GLOBAL_CSS = """
 <style>
-/* --- Tighter top padding --- */
 .block-container { padding-top: 1.5rem !important; }
 
-/* --- Summary Bar --- */
 .summary-bar {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -159,7 +199,6 @@ GLOBAL_CSS = """
 .sum-delta.up   { color: #34d399; }
 .sum-delta.down { color: #f87171; }
 
-/* --- Property Card --- */
 .prop-card {
     background: #1e2130;
     border: 1px solid #2a2d3a;
@@ -205,7 +244,6 @@ GLOBAL_CSS = """
     margin-top: 2px;
 }
 
-/* --- Badges --- */
 .badge {
     font-size: .67rem;
     font-weight: 700;
@@ -216,11 +254,11 @@ GLOBAL_CSS = """
     white-space: nowrap;
     flex-shrink: 0;
 }
-.badge-active  { background: rgba(52,211,153,.12); color: #34d399; }
-.badge-pending { background: rgba(251,191,36,.12);  color: #fbbf24; }
-.badge-vacant  { background: rgba(248,113,113,.12); color: #f87171; }
+.badge-active   { background: rgba(52,211,153,.12); color: #34d399; }
+.badge-pending  { background: rgba(251,191,36,.12);  color: #fbbf24; }
+.badge-inactive { background: rgba(248,113,113,.12); color: #f87171; }
+.badge-unknown  { background: rgba(107,114,128,.12); color: #6b7280; }
 
-/* --- KPI Strip --- */
 .kpi-strip {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -244,7 +282,6 @@ GLOBAL_CSS = """
 .kpi-val.pos { color: #34d399; }
 .kpi-val.neg { color: #f87171; }
 
-/* --- Sparkline row --- */
 .spark-row {
     display: flex;
     align-items: center;
@@ -263,7 +300,6 @@ GLOBAL_CSS = """
 }
 .spark-chart svg { width: 100%; height: 100%; }
 
-/* --- Card Footer --- */
 .card-foot {
     display: flex;
     justify-content: space-between;
@@ -274,8 +310,23 @@ GLOBAL_CSS = """
     font-size: .72rem;
     color: #6b7280;
 }
+.util-tags {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: -4px;
+}
+.util-tag {
+    font-size: .64rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(61,139,253,.1);
+    color: #3d8bfd;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
 
-/* --- Streamlit nav buttons styled to match cards --- */
 div[data-testid="stHorizontalBlock"] .stButton > button {
     background: transparent;
     border: 1px solid #2a2d3a;
@@ -301,8 +352,6 @@ st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
 # ================================================================
 # SPARKLINE SVG GENERATOR
-# Pass a list of numbers → get back an inline SVG string.
-# Auto-colors green (uptrend) or red (downtrend).
 # ================================================================
 def make_sparkline(data: list, width: int = 200, height: int = 36) -> str:
     if not data or len(data) < 2:
@@ -321,10 +370,10 @@ def make_sparkline(data: list, width: int = 200, height: int = 36) -> str:
 
     polyline = " ".join(pts)
     fill_poly = f"0,{height} {polyline} {width},{height}"
-    trend_clr = "#34d399" if data[-1] >= data[0] else "#f87171"
+    trend_clr = "#34d399" if data[-1] <= data[0] else "#f87171"
     last_x = width
     last_y = pad + uh - ((data[-1] - mn) / rng) * uh
-    grad_id = f"sg{id(data) % 99999}"
+    grad_id = f"sg{abs(hash(tuple(data))) % 99999}"
 
     return (
         f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" '
@@ -346,78 +395,68 @@ def make_sparkline(data: list, width: int = 200, height: int = 36) -> str:
 # ================================================================
 def fmt_currency(v):
     if abs(v) >= 1000:
-        return f"${v/1000:.1f}K"
-    return f"${v:,}"
+        return f"${v/1000:,.1f}K"
+    return f"${v:,.2f}"
 
 def fmt_currency_full(v):
-    return f"${v:,}"
+    return f"${v:,.2f}"
+
+def fmt_usage(v):
+    if abs(v) >= 1000:
+        return f"{v/1000:,.1f}K"
+    return f"{v:,.0f}"
 
 
 # ================================================================
 # COMPUTE AGGREGATE PORTFOLIO METRICS
-# Revenue-weighted YoY.  Averages exclude vacant properties.
 # ================================================================
-def compute_metrics(data):
-    total_rev = sum(p["revenue"] for p in data)
-    total_exp = sum(p["expenses"] for p in data)
-    total_noi = sum(p["noi"] for p in data)
-    active    = sum(1 for p in data if p["status"] == "Active")
-    occupied  = [p for p in data if p["occupancy"] > 0]
-    avg_occ   = (sum(p["occupancy"] for p in occupied) / len(occupied)) if occupied else 0
-    avg_cap   = (sum(p["cap_rate"] for p in occupied) / len(occupied)) if occupied else 0
-    rev_props = [p for p in data if p["revenue"] > 0]
+total_spend     = sum(p["total_cost"] for p in PORTFOLIO)
+total_usage_all = sum(p["total_usage"] for p in PORTFOLIO)
+active_count    = sum(1 for p in PORTFOLIO if p["status"] == "Active")
+prop_count      = len(PORTFOLIO)
+avg_monthly_all = sum(p["avg_monthly"] for p in PORTFOLIO)
+
+# Portfolio-level YoY: spend-weighted
+spend_props = [p for p in PORTFOLIO if p["total_cost"] > 0]
+if spend_props and sum(p["total_cost"] for p in spend_props) > 0:
     weighted_yoy = (
-        sum(p["yoy_change"] * p["revenue"] for p in rev_props)
-        / sum(p["revenue"] for p in rev_props)
-    ) if rev_props else 0
+        sum(p["yoy_change"] * p["total_cost"] for p in spend_props)
+        / sum(p["total_cost"] for p in spend_props)
+    )
+else:
+    weighted_yoy = 0.0
 
-    return {
-        "total_revenue": total_rev,
-        "total_expenses": total_exp,
-        "total_noi": total_noi,
-        "count": len(data),
-        "active": active,
-        "avg_occ": f"{avg_occ:.1f}",
-        "avg_cap": f"{avg_cap:.1f}",
-        "yoy": f"{weighted_yoy:.1f}",
-    }
-
-
-# ================================================================
-# RENDER: SUMMARY BAR
-# ================================================================
-m = compute_metrics(PORTFOLIO)
-yoy_val = float(m["yoy"])
-yoy_cls = "up" if yoy_val >= 0 else "down"
-yoy_arrow = "▲" if yoy_val >= 0 else "▼"
+# For costs: negative YoY = good (costs went down)
+yoy_cls = "down" if weighted_yoy > 0 else "up"
+yoy_arrow = "▲" if weighted_yoy > 0 else "▼"
 
 summary_html = f"""
 <div class="summary-bar">
     <div class="summary-metric">
         <span class="sum-label">Properties</span>
-        <span class="sum-value">{m['count']}</span>
-        <span class="sum-delta up">{m['active']} Active</span>
+        <span class="sum-value">{prop_count}</span>
+        <span class="sum-delta up">{active_count} Active</span>
     </div>
     <div class="summary-metric">
-        <span class="sum-label">Monthly Revenue</span>
-        <span class="sum-value">{fmt_currency_full(m['total_revenue'])}</span>
-        <span class="sum-delta {yoy_cls}">{yoy_arrow} {abs(yoy_val)}% YoY</span>
+        <span class="sum-label">Total Spend (12 mo)</span>
+        <span class="sum-value">{fmt_currency_full(total_spend)}</span>
+        <span class="sum-delta {yoy_cls}">{yoy_arrow} {abs(weighted_yoy):.1f}% YoY</span>
     </div>
     <div class="summary-metric">
-        <span class="sum-label">Net Operating Income</span>
-        <span class="sum-value">{fmt_currency_full(m['total_noi'])}</span>
+        <span class="sum-label">Avg Monthly / Property</span>
+        <span class="sum-value">{fmt_currency(avg_monthly_all / max(prop_count, 1))}</span>
     </div>
     <div class="summary-metric">
-        <span class="sum-label">Avg Occupancy</span>
-        <span class="sum-value">{m['avg_occ']}%</span>
+        <span class="sum-label">Total Usage</span>
+        <span class="sum-value">{fmt_usage(total_usage_all)}</span>
     </div>
     <div class="summary-metric">
-        <span class="sum-label">Avg Cap Rate</span>
-        <span class="sum-value">{m['avg_cap']}%</span>
+        <span class="sum-label">Total Bills</span>
+        <span class="sum-value">{sum(p['bill_count'] for p in PORTFOLIO):,}</span>
     </div>
     <div class="summary-metric">
-        <span class="sum-label">Monthly Expenses</span>
-        <span class="sum-value">{fmt_currency_full(m['total_expenses'])}</span>
+        <span class="sum-label">Last Updated</span>
+        <span class="sum-value" style="font-size:1rem">{last_updated}</span>
     </div>
 </div>
 """
@@ -425,9 +464,7 @@ st.markdown(summary_html, unsafe_allow_html=True)
 
 
 # ================================================================
-# RENDER: PROPERTY CARDS  (3 per row)
-# Each card = custom HTML (sparkline + KPIs + badge) +
-# a native st.button underneath for navigation.
+# RENDER: PROPERTY CARDS (3 per row)
 # ================================================================
 CARDS_PER_ROW = 3
 
@@ -441,50 +478,60 @@ for row_start in range(0, len(PORTFOLIO), CARDS_PER_ROW):
             badge_cls = (
                 "badge-active" if status_lower == "active"
                 else "badge-pending" if status_lower == "pending"
-                else "badge-vacant"
+                else "badge-inactive" if status_lower == "inactive"
+                else "badge-unknown"
             )
-            noi_cls = "pos" if prop["noi"] >= 0 else "neg"
-            yoy_sign = "+" if prop["yoy_change"] >= 0 else ""
-            yoy_color = "#34d399" if prop["yoy_change"] >= 0 else "#f87171"
-            spark_svg = make_sparkline(prop["revenue_history"])
+
+            yoy_cls = "pos" if prop["yoy_change"] <= 0 else "neg"
+            yoy_sign = "+" if prop["yoy_change"] > 0 else ""
+            yoy_color = "#34d399" if prop["yoy_change"] <= 0 else "#f87171"
+
+            spark_svg = make_sparkline(prop["cost_history"])
+
+            # Utility tags row
+            util_tags = ""
+            if prop["utilities"]:
+                tags = "".join(
+                    f'<span class="util-tag">{u}</span>' for u in prop["utilities"][:4]
+                )
+                util_tags = f'<div class="util-tags">{tags}</div>'
 
             card_html = f"""
             <div class="prop-card">
                 <div class="card-hdr">
                     <div>
                         <div class="card-title">{prop['name']}</div>
-                        <div class="card-addr">{prop['address']}</div>
+                        {util_tags}
                     </div>
                     <span class="badge {badge_cls}">{prop['status']}</span>
                 </div>
                 <div class="kpi-strip">
                     <div>
-                        <div class="kpi-label">Revenue</div>
-                        <div class="kpi-val">{fmt_currency(prop['revenue'])}</div>
+                        <div class="kpi-label">Total Cost</div>
+                        <div class="kpi-val">{fmt_currency(prop['total_cost'])}</div>
                     </div>
                     <div>
-                        <div class="kpi-label">NOI</div>
-                        <div class="kpi-val {noi_cls}">{fmt_currency(prop['noi'])}</div>
+                        <div class="kpi-label">Avg Monthly</div>
+                        <div class="kpi-val">{fmt_currency(prop['avg_monthly'])}</div>
                     </div>
                     <div>
-                        <div class="kpi-label">Occupancy</div>
-                        <div class="kpi-val">{prop['occupancy']}%</div>
+                        <div class="kpi-label">Usage</div>
+                        <div class="kpi-val">{fmt_usage(prop['total_usage'])}</div>
                     </div>
                 </div>
                 <div class="spark-row">
-                    <span class="spark-lbl">12-mo trend</span>
+                    <span class="spark-lbl">12-mo cost</span>
                     <div class="spark-chart">{spark_svg}</div>
                     <span class="spark-lbl" style="color:{yoy_color}">{yoy_sign}{prop['yoy_change']}%</span>
                 </div>
                 <div class="card-foot">
-                    <span class="card-updated">Updated {prop['last_updated']}</span>
+                    <span class="card-updated">Last bill {prop['last_updated']}</span>
+                    <span class="card-updated">{prop['bill_count']} bills</span>
                 </div>
             </div>
             """
             st.markdown(card_html, unsafe_allow_html=True)
 
-            # --- Nav button: stores property ID and jumps to detail page ---
-            if st.button(f"View Details →", key=f"nav_{prop['id']}"):
-                st.session_state["selected_property_id"] = prop["id"]
-                st.session_state["selected_property_name"] = prop["name"]
+            if st.button("View Details →", key=f"nav_{prop['id']}"):
+                st.session_state["selected_property"] = prop["name"]
                 st.switch_page("pages/3_Property_Detail.py")
