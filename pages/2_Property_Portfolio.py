@@ -37,6 +37,7 @@ _prop_candidates = [
     "Facility",
     "Name",
 ]
+
 PROP_COL = None
 for candidate in _prop_candidates:
     match = [c for c in df.columns if c.strip().lower() == candidate.lower()]
@@ -86,82 +87,70 @@ GLOBAL_CSS = """
     content: ''; position: absolute; right: 0; top: 4px; bottom: 4px;
     width: 1px; background: #2a2d3a;
 }
-.sum-label {
-    font-size: .7rem; font-weight: 600; text-transform: uppercase;
-    letter-spacing: .08em; color: #6b7280;
-}
-.sum-value { font-size: 1.45rem; font-weight: 700; color: #ffffff; line-height: 1.2; }
-.sum-delta { font-size: .76rem; font-weight: 600; }
+.sum-label  { font-size: .7rem; font-weight: 600; text-transform: uppercase;
+              letter-spacing: .08em; color: #6b7280; }
+.sum-value  { font-size: 1.45rem; font-weight: 700; color: #ffffff; line-height: 1.2; }
+.sum-delta  { font-size: .76rem; font-weight: 600; }
 .sum-delta.up   { color: #34d399; }
 .sum-delta.down { color: #f87171; }
 
 .prop-card {
-    background: #1e2130; border: 1px solid #2a2d3a; border-radius: 14px;
-    padding: 28px 32px 24px; display: flex; flex-direction: column;
-    gap: 18px; position: relative; overflow: hidden;
-    max-width: 720px; margin: 0 auto; transition: all .25s ease;
+    background: #1e2130; border: 1px solid #2a2d3a;
+    border-radius: 14px; padding: 28px 32px 24px;
+    display: flex; flex-direction: column; gap: 18px;
+    position: relative; overflow: hidden;
+    max-width: 720px; margin: 0 auto;
+    transition: all .25s ease;
 }
 .prop-card::before {
     content: ''; position: absolute; top: 0; left: 0; right: 0;
     height: 3px; background: #3d8bfd;
 }
-.card-hdr { display: flex; justify-content: space-between; align-items: flex-start; }
+.card-hdr   { display: flex; justify-content: space-between; align-items: flex-start; }
 .card-title { font-size: 1.25rem; font-weight: 700; color: #ffffff; line-height: 1.3; }
 .card-addr  { font-size: .8rem; color: #6b7280; margin-top: 2px; }
-.badge {
-    font-size: .7rem; font-weight: 700; text-transform: uppercase;
-    letter-spacing: .06em; padding: 5px 12px; border-radius: 20px;
-    white-space: nowrap; flex-shrink: 0;
-}
+.badge      { font-size: .7rem; font-weight: 700; text-transform: uppercase;
+              letter-spacing: .06em; padding: 5px 12px; border-radius: 20px;
+              white-space: nowrap; flex-shrink: 0; }
 .badge-active   { background: rgba(52,211,153,.12);  color: #34d399; }
-.badge-pending  { background: rgba(251,191,36,.12);   color: #fbbf24; }
-.badge-inactive { background: rgba(248,113,113,.12);  color: #f87171; }
-.badge-unknown  { background: rgba(107,114,128,.12);  color: #6b7280; }
+.badge-pending  { background: rgba(251,191,36,.12);  color: #fbbf24; }
+.badge-inactive { background: rgba(248,113,113,.12); color: #f87171; }
+.badge-unknown  { background: rgba(107,114,128,.12); color: #6b7280; }
 
 .kpi-strip {
     display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
     padding: 16px 0; border-top: 1px solid #2a2d3a; border-bottom: 1px solid #2a2d3a;
 }
-.kpi-label {
-    font-size: .7rem; font-weight: 600; text-transform: uppercase;
-    letter-spacing: .06em; color: #6b7280;
-}
-.kpi-val     { font-size: 1.2rem; font-weight: 700; color: #e8eaed; }
+.kpi-label { font-size: .7rem; font-weight: 600; text-transform: uppercase;
+             letter-spacing: .06em; color: #6b7280; }
+.kpi-val   { font-size: 1.2rem; font-weight: 700; color: #e8eaed; }
 .kpi-val.pos { color: #34d399; }
 .kpi-val.neg { color: #f87171; }
 
-.spark-row { display: flex; align-items: center; gap: 14px; }
-.spark-lbl { font-size: .76rem; color: #6b7280; white-space: nowrap; flex-shrink: 0; }
+.spark-row   { display: flex; align-items: center; gap: 14px; }
+.spark-lbl   { font-size: .76rem; color: #6b7280; white-space: nowrap; flex-shrink: 0; }
 .spark-chart { flex: 1; height: 48px; min-width: 0; }
 .spark-chart svg { width: 100%; height: 100%; }
 
-.card-foot {
-    display: flex; justify-content: space-between; align-items: center; padding-top: 4px;
-}
+.card-foot    { display: flex; justify-content: space-between; align-items: center; padding-top: 4px; }
 .card-updated { font-size: .74rem; color: #6b7280; }
 
 .util-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
-.util-tag {
-    font-size: .66rem; font-weight: 600; padding: 3px 10px; border-radius: 4px;
-    background: rgba(61,139,253,.1); color: #3d8bfd;
-    text-transform: uppercase; letter-spacing: .04em;
-}
+.util-tag  { font-size: .66rem; font-weight: 600; padding: 3px 10px;
+             border-radius: 4px; background: rgba(61,139,253,.1); color: #3d8bfd;
+             text-transform: uppercase; letter-spacing: .04em; }
 
-.filter-label {
-    font-size: .82rem; font-weight: 600; color: #9aa0b0; margin-bottom: 2px;
-    text-transform: uppercase; letter-spacing: .05em;
-}
+.filter-label { font-size: .82rem; font-weight: 600; color: #9aa0b0;
+                margin-bottom: 2px; text-transform: uppercase; letter-spacing: .05em; }
 
-.no-data-msg {
-    text-align: center; padding: 48px 24px; color: #6b7280; font-size: 1rem;
-    background: #1e2130; border: 1px dashed #2a2d3a; border-radius: 14px;
-    max-width: 720px; margin: 0 auto;
-}
+.no-data-msg { text-align: center; padding: 48px 24px; color: #6b7280;
+               font-size: 1rem; background: #1e2130; border: 1px dashed #2a2d3a;
+               border-radius: 14px; max-width: 720px; margin: 0 auto; }
 
 @media (max-width: 540px) {
-    .summary-bar    { grid-template-columns: repeat(2, 1fr); }
-    .kpi-strip      { grid-template-columns: repeat(2, 1fr); }
-    .prop-card      { padding: 20px; }
+    .summary-bar  { grid-template-columns: repeat(2, 1fr); }
+    .kpi-strip    { grid-template-columns: repeat(2, 1fr); }
+    .prop-card    { padding: 20px; }
 }
 </style>
 """
@@ -204,7 +193,7 @@ def make_sparkline(data: list, width: int = 200, height: int = 48) -> str:
     )
 
 # ================================================================
-# FORMATTERS  —  *** FULL NUMBERS, NO "K" ABBREVIATION ***
+# FORMATTERS — *** FULL NUMBERS, NO "K" ABBREVIATION ***
 # ================================================================
 def fmt_currency(v):
     return f"${v:,.2f}"
@@ -222,7 +211,6 @@ def build_portfolio(data):
     now = pd.Timestamp.now()
     current_year  = now.year
     current_month = now.month
-
     portfolio = []
 
     for prop_name, grp in data.groupby(PROP_COL):
@@ -237,9 +225,10 @@ def build_portfolio(data):
         else:
             grp = grp.copy()
             month_map = {
-                "january": 1, "february": 2, "march": 3, "april": 4,
-                "may": 5, "june": 6, "july": 7, "august": 8,
-                "september": 9, "october": 10, "november": 11, "december": 12,
+                "january": 1, "february": 2, "march": 3,
+                "april": 4,   "may": 5,      "june": 6,
+                "july": 7,    "august": 8,    "september": 9,
+                "october": 10,"november": 11, "december": 12,
             }
             grp["Month_Num"] = (
                 grp["Month"]
@@ -254,6 +243,11 @@ def build_portfolio(data):
 
         grp["Year"] = pd.to_numeric(grp["Year"], errors="coerce")
         grp = grp.dropna(subset=["Year", "Month_Num"])
+
+        # ── FIX: skip this property if every row was NaN ──
+        if grp.empty:
+            continue
+
         grp["Year"]      = grp["Year"].astype(int)
         grp["Month_Num"] = grp["Month_Num"].astype(int)
 
@@ -262,22 +256,23 @@ def build_portfolio(data):
 
         # --- Total cost & usage (all time) ---
         total_cost  = grp["$ Amount"].sum() if "$ Amount" in grp.columns else 0
-        total_usage = grp["Usage"].sum()    if "Usage"    in grp.columns else 0
+        total_usage = grp["Usage"].sum()    if "Usage" in grp.columns else 0
         bill_count  = len(grp)
 
         # --- 12-month window using Year / Month_Num ---
-        grp["_period"] = grp["Year"] * 12 + grp["Month_Num"]
-        current_period = current_year * 12 + current_month
-        twelve_ago     = current_period - 11   # inclusive of current month
-        twentyfour_ago = current_period - 23
+        grp["_period"]   = grp["Year"] * 12 + grp["Month_Num"]
+        current_period   = current_year * 12 + current_month
+        twelve_ago       = current_period - 11          # inclusive of current month
+        twentyfour_ago   = current_period - 23
 
-        recent = grp[grp["_period"].between(twelve_ago, current_period)]
-        cost_12m     = recent["$ Amount"].sum() if "$ Amount" in recent.columns else 0
-        avg_monthly  = cost_12m / max(len(recent["_period"].unique()), 1)
+        recent   = grp[grp["_period"].between(twelve_ago, current_period)]
+        cost_12m = recent["$ Amount"].sum() if "$ Amount" in recent.columns else 0
+        avg_monthly = cost_12m / max(len(recent["_period"].unique()), 1)
 
         # --- Prior 12-month window (for YoY) ---
-        prior = grp[grp["_period"].between(twentyfour_ago, twelve_ago - 1)]
+        prior      = grp[grp["_period"].between(twentyfour_ago, twelve_ago - 1)]
         cost_prior = prior["$ Amount"].sum() if not prior.empty and "$ Amount" in prior.columns else 0
+
         if cost_prior > 0:
             yoy_change = round(((cost_12m - cost_prior) / cost_prior) * 100, 1)
         else:
@@ -498,7 +493,6 @@ card_html = f"""
     </div>
     <span class="badge {badge_cls}">{prop['status']}</span>
   </div>
-
   <div class="kpi-strip">
     <div>
       <div class="kpi-label">Total Cost</div>
@@ -517,12 +511,10 @@ card_html = f"""
       <div class="kpi-val" style="color:{yoy_color}">{yoy_sign}{prop['yoy_change']}%</div>
     </div>
   </div>
-
   <div class="spark-row">
     <span class="spark-lbl">12-mo cost trend</span>
     <div class="spark-chart">{spark_svg}</div>
   </div>
-
   <div class="card-foot">
     <span class="card-updated">Last bill {prop['last_updated']}</span>
     <span class="card-updated">{prop['bill_count']} bills</span>
