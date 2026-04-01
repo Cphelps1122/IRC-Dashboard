@@ -6,7 +6,7 @@ from utils.load_data import load_data
 
 
 # ---------------------------------------------------------
-# GLOBAL PREMIUM CSS
+# 1️⃣ GLOBAL PREMIUM CSS (MUST BE FIRST)
 # ---------------------------------------------------------
 st.markdown("""
 <style>
@@ -78,7 +78,7 @@ st.markdown("""
 
 
 # ---------------------------------------------------------
-# Formatting Helpers
+# 2️⃣ Formatting Helpers
 # ---------------------------------------------------------
 def fmt_currency(x):
     if pd.isna(x):
@@ -101,7 +101,7 @@ def compute_yoy(df, start_date, end_date):
 
 
 # ---------------------------------------------------------
-# PREMIUM PROPERTY CARD
+# 3️⃣ PREMIUM PROPERTY CARD
 # ---------------------------------------------------------
 def property_card(df_prop, start_date, end_date):
     df_period = df_prop[
@@ -184,7 +184,7 @@ def property_card(df_prop, start_date, end_date):
 
 
 # ---------------------------------------------------------
-# MAIN PAGE
+# 4️⃣ MAIN PAGE
 # ---------------------------------------------------------
 st.title("Property Portfolio Overview")
 
