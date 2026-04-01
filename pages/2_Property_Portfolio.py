@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-from util.load_data import load_data
+from utils.load_data import load_data
 
 
 # ---------------------------------------------------------
