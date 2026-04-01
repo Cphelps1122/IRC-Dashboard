@@ -1,14 +1,13 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-
 from utils.load_data import load_data
 
 
 # ---------------------------------------------------------
-# 1️⃣ GLOBAL PREMIUM CSS (MUST BE FIRST)
+# 1️⃣ GLOBAL CSS INJECTION (bulletproof)
 # ---------------------------------------------------------
-st.markdown("""
+st.html("""
 <style>
 
 .property-card {
@@ -74,11 +73,11 @@ st.markdown("""
 }
 
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
 # ---------------------------------------------------------
-# 2️⃣ Formatting Helpers
+# 2️⃣ Helpers
 # ---------------------------------------------------------
 def fmt_currency(x):
     if pd.isna(x):
@@ -101,7 +100,7 @@ def compute_yoy(df, start_date, end_date):
 
 
 # ---------------------------------------------------------
-# 3️⃣ PREMIUM PROPERTY CARD
+# 3️⃣ PREMIUM CARD COMPONENT
 # ---------------------------------------------------------
 def property_card(df_prop, start_date, end_date):
     df_period = df_prop[
@@ -141,7 +140,6 @@ def property_card(df_prop, start_date, end_date):
         yoy_arrow = ""
         yoy_text = "0%"
 
-    # Utility rows
     util_html = "".join(
         f"""
         <div class="utility-row">
@@ -152,8 +150,7 @@ def property_card(df_prop, start_date, end_date):
         for u, v in utilities.items()
     )
 
-    # Final card HTML
-    st.markdown(
+    st.html(
         f"""
         <div class="property-card">
 
@@ -178,8 +175,7 @@ def property_card(df_prop, start_date, end_date):
             </div>
 
         </div>
-        """,
-        unsafe_allow_html=True
+        """
     )
 
 
@@ -191,7 +187,6 @@ st.title("Property Portfolio Overview")
 df, last_updated = load_data()
 df["Billing Date"] = pd.to_datetime(df["Billing Date"], errors="coerce")
 
-# Date selectors
 years = sorted(df["Billing Date"].dt.year.unique())
 months = {
     1:"Jan",2:"Feb",3:"Mar",4:"Apr",5:"May",6:"Jun",
@@ -221,7 +216,6 @@ end_date = pd.Timestamp(end_year, end_month, 28) + pd.offsets.MonthEnd(0)
 
 properties = sorted(df["Property Name"].unique())
 
-# Render grid
 cols = st.columns(3)
 
 for i, prop in enumerate(properties):
