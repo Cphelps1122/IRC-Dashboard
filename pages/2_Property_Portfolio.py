@@ -16,7 +16,6 @@ st.set_page_config(
 
 # ================================================================
 # LOAD LIVE DATA FROM GOOGLE SHEETS
-# Uses your existing utils/load_data.py → returns (df, timestamp)
 # ================================================================
 df, last_updated = load_data()
 
@@ -25,8 +24,7 @@ if df.empty:
     st.stop()
 
 # ================================================================
-# COLUMN DETECTION — Finds your property name column automatically.
-# If your column is named something else, add it to the list below.
+# COLUMN DETECTION
 # ================================================================
 _prop_candidates = [
     "Property Name", "Property", "Account", "Location",
@@ -47,7 +45,6 @@ if PROP_COL is None:
     )
     st.stop()
 
-# Optional: detect a Utility type column (water, electric, gas, etc.)
 _util_candidates = ["Utility", "Utility Type", "Service", "Type", "Service Type"]
 UTIL_COL = None
 for candidate in _util_candidates:
@@ -58,7 +55,6 @@ for candidate in _util_candidates:
 
 # ================================================================
 # AGGREGATE BILLING DATA → One summary dict per property
-# This replaces the hardcoded PORTFOLIO list.
 # ================================================================
 now = pd.Timestamp.now()
 twelve_months_ago = now - pd.DateOffset(months=12)
@@ -69,30 +65,25 @@ PORTFOLIO = []
 for prop_name, grp in df.groupby(PROP_COL):
     grp = grp.sort_values("Billing Date")
 
-    # --- Total cost & usage (all time) ---
     total_cost = grp["$ Amount"].sum() if "$ Amount" in grp.columns else 0
     total_usage = grp["Usage"].sum() if "Usage" in grp.columns else 0
     bill_count = len(grp)
 
-    # --- Last 12 months slice ---
     recent = grp[grp["Billing Date"] >= twelve_months_ago] if "Billing Date" in grp.columns else grp
     cost_12m = recent["$ Amount"].sum() if "$ Amount" in recent.columns else 0
     avg_monthly = cost_12m / max(len(recent), 1)
 
-    # --- Prior 12 months slice (for YoY) ---
     prior = grp[
         (grp["Billing Date"] >= twentyfour_months_ago)
         & (grp["Billing Date"] < twelve_months_ago)
     ] if "Billing Date" in grp.columns else pd.DataFrame()
     cost_prior = prior["$ Amount"].sum() if not prior.empty and "$ Amount" in prior.columns else 0
 
-    # --- YoY % change (cost going DOWN is good → green) ---
     if cost_prior > 0:
         yoy_change = round(((cost_12m - cost_prior) / cost_prior) * 100, 1)
     else:
         yoy_change = 0.0
 
-    # --- Monthly cost history for sparkline (last 12 months) ---
     cost_history = []
     if "Billing Date" in grp.columns and "$ Amount" in grp.columns:
         recent_data = grp[grp["Billing Date"] >= twelve_months_ago].copy()
@@ -100,7 +91,6 @@ for prop_name, grp in df.groupby(PROP_COL):
             recent_data["month"] = recent_data["Billing Date"].dt.to_period("M")
             monthly = recent_data.groupby("month")["$ Amount"].sum().sort_index()
             cost_history = monthly.tolist()
-    # Fallback: use all data if less than 2 months in range
     if len(cost_history) < 2 and "$ Amount" in grp.columns:
         grp_copy = grp.copy()
         if "Billing Date" in grp_copy.columns:
@@ -108,7 +98,6 @@ for prop_name, grp in df.groupby(PROP_COL):
             monthly = grp_copy.groupby("month")["$ Amount"].sum().sort_index()
             cost_history = monthly.tolist()
 
-    # --- Status: Active if billed within 90 days, else Inactive ---
     last_bill = grp["Billing Date"].max() if "Billing Date" in grp.columns else None
     if pd.notna(last_bill):
         days_since = (now - last_bill).days
@@ -123,7 +112,6 @@ for prop_name, grp in df.groupby(PROP_COL):
         status = "Unknown"
         last_bill_str = "N/A"
 
-    # --- Utility types served ---
     utilities = []
     if UTIL_COL and UTIL_COL in grp.columns:
         utilities = grp[UTIL_COL].dropna().unique().tolist()
@@ -142,7 +130,6 @@ for prop_name, grp in df.groupby(PROP_COL):
         "utilities": utilities,
     })
 
-# Sort: Active first, then by total cost descending
 status_order = {"Active": 0, "Pending": 1, "Inactive": 2, "Unknown": 3}
 PORTFOLIO.sort(key=lambda p: (status_order.get(p["status"], 9), -p["total_cost"]))
 
@@ -202,13 +189,15 @@ GLOBAL_CSS = """
 .prop-card {
     background: #1e2130;
     border: 1px solid #2a2d3a;
-    border-radius: 12px;
-    padding: 22px 24px 18px;
+    border-radius: 14px;
+    padding: 28px 32px 24px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 18px;
     position: relative;
     overflow: hidden;
+    max-width: 720px;
+    margin: 0 auto;
     transition: all .25s ease;
 }
 .prop-card::before {
@@ -217,15 +206,7 @@ GLOBAL_CSS = """
     top: 0; left: 0; right: 0;
     height: 3px;
     background: #3d8bfd;
-    transform: scaleX(0);
-    transition: transform .3s ease;
 }
-.prop-card:hover {
-    border-color: #3d8bfd;
-    box-shadow: 0 4px 20px rgba(61,139,253,.15), 0 8px 32px rgba(0,0,0,.3);
-    transform: translateY(-2px);
-}
-.prop-card:hover::before { transform: scaleX(1); }
 
 .card-hdr {
     display: flex;
@@ -233,23 +214,23 @@ GLOBAL_CSS = """
     align-items: flex-start;
 }
 .card-title {
-    font-size: 1.02rem;
+    font-size: 1.25rem;
     font-weight: 700;
     color: #ffffff;
     line-height: 1.3;
 }
 .card-addr {
-    font-size: .77rem;
+    font-size: .8rem;
     color: #6b7280;
     margin-top: 2px;
 }
 
 .badge {
-    font-size: .67rem;
+    font-size: .7rem;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .06em;
-    padding: 4px 10px;
+    padding: 5px 12px;
     border-radius: 20px;
     white-space: nowrap;
     flex-shrink: 0;
@@ -261,21 +242,21 @@ GLOBAL_CSS = """
 
 .kpi-strip {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 8px;
-    padding: 12px 0;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    padding: 16px 0;
     border-top: 1px solid #2a2d3a;
     border-bottom: 1px solid #2a2d3a;
 }
 .kpi-label {
-    font-size: .67rem;
+    font-size: .7rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: .06em;
     color: #6b7280;
 }
 .kpi-val {
-    font-size: 1.06rem;
+    font-size: 1.2rem;
     font-weight: 700;
     color: #e8eaed;
 }
@@ -285,17 +266,17 @@ GLOBAL_CSS = """
 .spark-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
 }
 .spark-lbl {
-    font-size: .72rem;
+    font-size: .76rem;
     color: #6b7280;
     white-space: nowrap;
     flex-shrink: 0;
 }
 .spark-chart {
     flex: 1;
-    height: 36px;
+    height: 48px;
     min-width: 0;
 }
 .spark-chart svg { width: 100%; height: 100%; }
@@ -304,22 +285,22 @@ GLOBAL_CSS = """
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding-top: 2px;
+    padding-top: 4px;
 }
 .card-updated {
-    font-size: .72rem;
+    font-size: .74rem;
     color: #6b7280;
 }
 .util-tags {
     display: flex;
     gap: 6px;
     flex-wrap: wrap;
-    margin-top: -4px;
+    margin-top: 2px;
 }
 .util-tag {
-    font-size: .64rem;
+    font-size: .66rem;
     font-weight: 600;
-    padding: 2px 8px;
+    padding: 3px 10px;
     border-radius: 4px;
     background: rgba(61,139,253,.1);
     color: #3d8bfd;
@@ -327,23 +308,10 @@ GLOBAL_CSS = """
     letter-spacing: .04em;
 }
 
-div[data-testid="stHorizontalBlock"] .stButton > button {
-    background: transparent;
-    border: 1px solid #2a2d3a;
-    color: #3d8bfd;
-    font-size: .78rem;
-    font-weight: 600;
-    padding: 5px 16px;
-    border-radius: 8px;
-    transition: all .2s;
-}
-div[data-testid="stHorizontalBlock"] .stButton > button:hover {
-    border-color: #3d8bfd;
-    background: rgba(61,139,253,.1);
-}
-
 @media (max-width: 540px) {
     .summary-bar { grid-template-columns: repeat(2, 1fr); }
+    .kpi-strip { grid-template-columns: repeat(2, 1fr); }
+    .prop-card { padding: 20px; }
 }
 </style>
 """
@@ -353,7 +321,7 @@ st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 # ================================================================
 # SPARKLINE SVG GENERATOR
 # ================================================================
-def make_sparkline(data: list, width: int = 200, height: int = 36) -> str:
+def make_sparkline(data: list, width: int = 200, height: int = 48) -> str:
     if not data or len(data) < 2:
         return ""
     mn = min(data)
@@ -408,7 +376,7 @@ def fmt_usage(v):
 
 
 # ================================================================
-# COMPUTE AGGREGATE PORTFOLIO METRICS
+# SUMMARY BAR
 # ================================================================
 total_spend     = sum(p["total_cost"] for p in PORTFOLIO)
 total_usage_all = sum(p["total_usage"] for p in PORTFOLIO)
@@ -416,7 +384,6 @@ active_count    = sum(1 for p in PORTFOLIO if p["status"] == "Active")
 prop_count      = len(PORTFOLIO)
 avg_monthly_all = sum(p["avg_monthly"] for p in PORTFOLIO)
 
-# Portfolio-level YoY: spend-weighted
 spend_props = [p for p in PORTFOLIO if p["total_cost"] > 0]
 if spend_props and sum(p["total_cost"] for p in spend_props) > 0:
     weighted_yoy = (
@@ -426,7 +393,6 @@ if spend_props and sum(p["total_cost"] for p in spend_props) > 0:
 else:
     weighted_yoy = 0.0
 
-# For costs: negative YoY = good (costs went down)
 yoy_cls = "down" if weighted_yoy > 0 else "up"
 yoy_arrow = "▲" if weighted_yoy > 0 else "▼"
 
@@ -464,74 +430,86 @@ st.markdown(summary_html, unsafe_allow_html=True)
 
 
 # ================================================================
-# RENDER: PROPERTY CARDS (3 per row)
+# PROPERTY DROPDOWN SELECTOR
 # ================================================================
-CARDS_PER_ROW = 3
+property_names = [p["name"] for p in PORTFOLIO]
+selected_name = st.selectbox(
+    "Select a Property",
+    options=property_names,
+    index=0,
+    key="portfolio_property_selector",
+)
 
-for row_start in range(0, len(PORTFOLIO), CARDS_PER_ROW):
-    row_props = PORTFOLIO[row_start : row_start + CARDS_PER_ROW]
-    cols = st.columns(CARDS_PER_ROW)
+# Find the selected property
+prop = next(p for p in PORTFOLIO if p["name"] == selected_name)
 
-    for col, prop in zip(cols, row_props):
-        with col:
-            status_lower = prop["status"].lower()
-            badge_cls = (
-                "badge-active" if status_lower == "active"
-                else "badge-pending" if status_lower == "pending"
-                else "badge-inactive" if status_lower == "inactive"
-                else "badge-unknown"
-            )
 
-            yoy_cls = "pos" if prop["yoy_change"] <= 0 else "neg"
-            yoy_sign = "+" if prop["yoy_change"] > 0 else ""
-            yoy_color = "#34d399" if prop["yoy_change"] <= 0 else "#f87171"
+# ================================================================
+# RENDER: SELECTED PROPERTY CARD
+# ================================================================
+status_lower = prop["status"].lower()
+badge_cls = (
+    "badge-active" if status_lower == "active"
+    else "badge-pending" if status_lower == "pending"
+    else "badge-inactive" if status_lower == "inactive"
+    else "badge-unknown"
+)
 
-            spark_svg = make_sparkline(prop["cost_history"])
+yoy_sign = "+" if prop["yoy_change"] > 0 else ""
+yoy_color = "#34d399" if prop["yoy_change"] <= 0 else "#f87171"
 
-            # Utility tags row
-            util_tags = ""
-            if prop["utilities"]:
-                tags = "".join(
-                    f'<span class="util-tag">{u}</span>' for u in prop["utilities"][:4]
-                )
-                util_tags = f'<div class="util-tags">{tags}</div>'
+spark_svg = make_sparkline(prop["cost_history"])
 
-            card_html = f"""
-            <div class="prop-card">
-                <div class="card-hdr">
-                    <div>
-                        <div class="card-title">{prop['name']}</div>
-                        {util_tags}
-                    </div>
-                    <span class="badge {badge_cls}">{prop['status']}</span>
-                </div>
-                <div class="kpi-strip">
-                    <div>
-                        <div class="kpi-label">Total Cost</div>
-                        <div class="kpi-val">{fmt_currency(prop['total_cost'])}</div>
-                    </div>
-                    <div>
-                        <div class="kpi-label">Avg Monthly</div>
-                        <div class="kpi-val">{fmt_currency(prop['avg_monthly'])}</div>
-                    </div>
-                    <div>
-                        <div class="kpi-label">Usage</div>
-                        <div class="kpi-val">{fmt_usage(prop['total_usage'])}</div>
-                    </div>
-                </div>
-                <div class="spark-row">
-                    <span class="spark-lbl">12-mo cost</span>
-                    <div class="spark-chart">{spark_svg}</div>
-                    <span class="spark-lbl" style="color:{yoy_color}">{yoy_sign}{prop['yoy_change']}%</span>
-                </div>
-                <div class="card-foot">
-                    <span class="card-updated">Last bill {prop['last_updated']}</span>
-                    <span class="card-updated">{prop['bill_count']} bills</span>
-                </div>
-            </div>
-            """
-            st.markdown(card_html, unsafe_allow_html=True)
+util_tags = ""
+if prop["utilities"]:
+    tags = "".join(
+        f'<span class="util-tag">{u}</span>' for u in prop["utilities"][:6]
+    )
+    util_tags = f'<div class="util-tags">{tags}</div>'
 
-            if st.button("View Details →", key=f"nav_{prop['id']}"):
-                st.session_state["selected_property"] = prop["name"]
-                st.switch_page("pages/3_Property_Detail.py")
+card_html = f"""
+<div class="prop-card">
+    <div class="card-hdr">
+        <div>
+            <div class="card-title">{prop['name']}</div>
+            {util_tags}
+        </div>
+        <span class="badge {badge_cls}">{prop['status']}</span>
+    </div>
+    <div class="kpi-strip">
+        <div>
+            <div class="kpi-label">Total Cost</div>
+            <div class="kpi-val">{fmt_currency(prop['total_cost'])}</div>
+        </div>
+        <div>
+            <div class="kpi-label">Avg Monthly</div>
+            <div class="kpi-val">{fmt_currency(prop['avg_monthly'])}</div>
+        </div>
+        <div>
+            <div class="kpi-label">Usage</div>
+            <div class="kpi-val">{fmt_usage(prop['total_usage'])}</div>
+        </div>
+        <div>
+            <div class="kpi-label">YoY Change</div>
+            <div class="kpi-val" style="color:{yoy_color}">{yoy_sign}{prop['yoy_change']}%</div>
+        </div>
+    </div>
+    <div class="spark-row">
+        <span class="spark-lbl">12-mo cost trend</span>
+        <div class="spark-chart">{spark_svg}</div>
+    </div>
+    <div class="card-foot">
+        <span class="card-updated">Last bill {prop['last_updated']}</span>
+        <span class="card-updated">{prop['bill_count']} bills</span>
+    </div>
+</div>
+"""
+st.markdown(card_html, unsafe_allow_html=True)
+
+# --- Centered nav button below the card ---
+st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+_, center_col, _ = st.columns([1, 2, 1])
+with center_col:
+    if st.button("View Full Details →", key=f"nav_{prop['id']}", use_container_width=True):
+        st.session_state["selected_property"] = prop["name"]
+        st.switch_page("pages/3_Property_Detail.py")
