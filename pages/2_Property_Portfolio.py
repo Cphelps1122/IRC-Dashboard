@@ -4,9 +4,6 @@ import numpy as np
 from datetime import datetime, timedelta
 from utils.load_data import load_data
 
-require_auth()
-st.set_page_config(page_title="Property Portfolio", layout="wide")
-
 # ================================================================
 # PAGE CONFIG
 # ================================================================
