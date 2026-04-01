@@ -54,87 +54,6 @@ for candidate in _util_candidates:
         break
 
 # ================================================================
-# AGGREGATE BILLING DATA → One summary dict per property
-# ================================================================
-now = pd.Timestamp.now()
-twelve_months_ago = now - pd.DateOffset(months=12)
-twentyfour_months_ago = now - pd.DateOffset(months=24)
-
-PORTFOLIO = []
-
-for prop_name, grp in df.groupby(PROP_COL):
-    grp = grp.sort_values("Billing Date")
-
-    total_cost = grp["$ Amount"].sum() if "$ Amount" in grp.columns else 0
-    total_usage = grp["Usage"].sum() if "Usage" in grp.columns else 0
-    bill_count = len(grp)
-
-    recent = grp[grp["Billing Date"] >= twelve_months_ago] if "Billing Date" in grp.columns else grp
-    cost_12m = recent["$ Amount"].sum() if "$ Amount" in recent.columns else 0
-    avg_monthly = cost_12m / max(len(recent), 1)
-
-    prior = grp[
-        (grp["Billing Date"] >= twentyfour_months_ago)
-        & (grp["Billing Date"] < twelve_months_ago)
-    ] if "Billing Date" in grp.columns else pd.DataFrame()
-    cost_prior = prior["$ Amount"].sum() if not prior.empty and "$ Amount" in prior.columns else 0
-
-    if cost_prior > 0:
-        yoy_change = round(((cost_12m - cost_prior) / cost_prior) * 100, 1)
-    else:
-        yoy_change = 0.0
-
-    cost_history = []
-    if "Billing Date" in grp.columns and "$ Amount" in grp.columns:
-        recent_data = grp[grp["Billing Date"] >= twelve_months_ago].copy()
-        if not recent_data.empty:
-            recent_data["month"] = recent_data["Billing Date"].dt.to_period("M")
-            monthly = recent_data.groupby("month")["$ Amount"].sum().sort_index()
-            cost_history = monthly.tolist()
-    if len(cost_history) < 2 and "$ Amount" in grp.columns:
-        grp_copy = grp.copy()
-        if "Billing Date" in grp_copy.columns:
-            grp_copy["month"] = grp_copy["Billing Date"].dt.to_period("M")
-            monthly = grp_copy.groupby("month")["$ Amount"].sum().sort_index()
-            cost_history = monthly.tolist()
-
-    last_bill = grp["Billing Date"].max() if "Billing Date" in grp.columns else None
-    if pd.notna(last_bill):
-        days_since = (now - last_bill).days
-        if days_since <= 90:
-            status = "Active"
-        elif days_since <= 180:
-            status = "Pending"
-        else:
-            status = "Inactive"
-        last_bill_str = last_bill.strftime("%Y-%m-%d")
-    else:
-        status = "Unknown"
-        last_bill_str = "N/A"
-
-    utilities = []
-    if UTIL_COL and UTIL_COL in grp.columns:
-        utilities = grp[UTIL_COL].dropna().unique().tolist()
-
-    PORTFOLIO.append({
-        "id": prop_name.lower().replace(" ", "-").replace("/", "-"),
-        "name": str(prop_name),
-        "status": status,
-        "total_cost": round(total_cost, 2),
-        "avg_monthly": round(avg_monthly, 2),
-        "total_usage": round(total_usage, 1),
-        "bill_count": bill_count,
-        "yoy_change": yoy_change,
-        "cost_history": cost_history,
-        "last_updated": last_bill_str,
-        "utilities": utilities,
-    })
-
-status_order = {"Active": 0, "Pending": 1, "Inactive": 2, "Unknown": 3}
-PORTFOLIO.sort(key=lambda p: (status_order.get(p["status"], 9), -p["total_cost"]))
-
-
-# ================================================================
 # GLOBAL CSS
 # ================================================================
 GLOBAL_CSS = """
@@ -307,6 +226,25 @@ GLOBAL_CSS = """
     text-transform: uppercase;
     letter-spacing: .04em;
 }
+.filter-label {
+    font-size: .82rem;
+    font-weight: 600;
+    color: #9aa0b0;
+    margin-bottom: 2px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+}
+.no-data-msg {
+    text-align: center;
+    padding: 48px 24px;
+    color: #6b7280;
+    font-size: 1rem;
+    background: #1e2130;
+    border: 1px dashed #2a2d3a;
+    border-radius: 14px;
+    max-width: 720px;
+    margin: 0 auto;
+}
 
 @media (max-width: 540px) {
     .summary-bar { grid-template-columns: repeat(2, 1fr); }
@@ -376,7 +314,154 @@ def fmt_usage(v):
 
 
 # ================================================================
-# SUMMARY BAR
+# AGGREGATE FUNCTION — Builds PORTFOLIO from a filtered DataFrame
+# ================================================================
+def build_portfolio(data):
+    now = pd.Timestamp.now()
+    twelve_months_ago = now - pd.DateOffset(months=12)
+    twentyfour_months_ago = now - pd.DateOffset(months=24)
+
+    portfolio = []
+
+    for prop_name, grp in data.groupby(PROP_COL):
+        grp = grp.sort_values("Billing Date")
+
+        total_cost = grp["$ Amount"].sum() if "$ Amount" in grp.columns else 0
+        total_usage = grp["Usage"].sum() if "Usage" in grp.columns else 0
+        bill_count = len(grp)
+
+        recent = grp[grp["Billing Date"] >= twelve_months_ago] if "Billing Date" in grp.columns else grp
+        cost_12m = recent["$ Amount"].sum() if "$ Amount" in recent.columns else 0
+        avg_monthly = cost_12m / max(len(recent), 1)
+
+        prior = grp[
+            (grp["Billing Date"] >= twentyfour_months_ago)
+            & (grp["Billing Date"] < twelve_months_ago)
+        ] if "Billing Date" in grp.columns else pd.DataFrame()
+        cost_prior = prior["$ Amount"].sum() if not prior.empty and "$ Amount" in prior.columns else 0
+
+        if cost_prior > 0:
+            yoy_change = round(((cost_12m - cost_prior) / cost_prior) * 100, 1)
+        else:
+            yoy_change = 0.0
+
+        cost_history = []
+        if "Billing Date" in grp.columns and "$ Amount" in grp.columns:
+            recent_data = grp[grp["Billing Date"] >= twelve_months_ago].copy()
+            if not recent_data.empty:
+                recent_data["month"] = recent_data["Billing Date"].dt.to_period("M")
+                monthly = recent_data.groupby("month")["$ Amount"].sum().sort_index()
+                cost_history = monthly.tolist()
+        if len(cost_history) < 2 and "$ Amount" in grp.columns:
+            grp_copy = grp.copy()
+            if "Billing Date" in grp_copy.columns:
+                grp_copy["month"] = grp_copy["Billing Date"].dt.to_period("M")
+                monthly = grp_copy.groupby("month")["$ Amount"].sum().sort_index()
+                cost_history = monthly.tolist()
+
+        last_bill = grp["Billing Date"].max() if "Billing Date" in grp.columns else None
+        if pd.notna(last_bill):
+            days_since = (now - last_bill).days
+            if days_since <= 90:
+                status = "Active"
+            elif days_since <= 180:
+                status = "Pending"
+            else:
+                status = "Inactive"
+            last_bill_str = last_bill.strftime("%Y-%m-%d")
+        else:
+            status = "Unknown"
+            last_bill_str = "N/A"
+
+        utilities = []
+        if UTIL_COL and UTIL_COL in grp.columns:
+            utilities = grp[UTIL_COL].dropna().unique().tolist()
+
+        portfolio.append({
+            "id": str(prop_name).lower().replace(" ", "-").replace("/", "-"),
+            "name": str(prop_name),
+            "status": status,
+            "total_cost": round(total_cost, 2),
+            "avg_monthly": round(avg_monthly, 2),
+            "total_usage": round(total_usage, 1),
+            "bill_count": bill_count,
+            "yoy_change": yoy_change,
+            "cost_history": cost_history,
+            "last_updated": last_bill_str,
+            "utilities": utilities,
+        })
+
+    status_order = {"Active": 0, "Pending": 1, "Inactive": 2, "Unknown": 3}
+    portfolio.sort(key=lambda p: (status_order.get(p["status"], 9), -p["total_cost"]))
+    return portfolio
+
+
+# ================================================================
+# FILTER DROPDOWNS — Utility Type + Property (side-by-side)
+# ================================================================
+UTILITY_OPTIONS = ["Select All", "Water", "Electric", "Gas", "Sewage"]
+
+filter_col1, filter_col2 = st.columns(2)
+
+with filter_col1:
+    selected_utility = st.selectbox(
+        "Utility Type",
+        options=UTILITY_OPTIONS,
+        index=0,
+        key="utility_type_filter",
+    )
+
+# ================================================================
+# APPLY UTILITY FILTER BEFORE AGGREGATION
+# ================================================================
+if selected_utility == "Select All":
+    df_filtered = df.copy()
+    active_filter_label = "All Utilities"
+else:
+    if UTIL_COL:
+        df_filtered = df[
+            df[UTIL_COL].str.strip().str.lower() == selected_utility.lower()
+        ].copy()
+    else:
+        df_filtered = df.copy()
+        st.warning(
+            f"No utility type column detected in your data. "
+            f"Showing all records. Your columns: {list(df.columns)}"
+        )
+    active_filter_label = selected_utility
+
+# ================================================================
+# BUILD PORTFOLIO FROM FILTERED DATA
+# ================================================================
+PORTFOLIO = build_portfolio(df_filtered)
+
+# ================================================================
+# PROPERTY DROPDOWN — Populated from filtered results
+# ================================================================
+if not PORTFOLIO:
+    with filter_col2:
+        st.selectbox("Select a Property", options=["No properties found"], disabled=True, key="prop_disabled")
+    st.markdown(
+        f'<div class="no-data-msg">No billing data found for <strong>{active_filter_label}</strong>.</div>',
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+property_names = [p["name"] for p in PORTFOLIO]
+
+with filter_col2:
+    selected_name = st.selectbox(
+        "Select a Property",
+        options=property_names,
+        index=0,
+        key="portfolio_property_selector",
+    )
+
+prop = next(p for p in PORTFOLIO if p["name"] == selected_name)
+
+
+# ================================================================
+# SUMMARY BAR — Reflects the active utility filter
 # ================================================================
 total_spend     = sum(p["total_cost"] for p in PORTFOLIO)
 total_usage_all = sum(p["total_usage"] for p in PORTFOLIO)
@@ -430,22 +515,7 @@ st.markdown(summary_html, unsafe_allow_html=True)
 
 
 # ================================================================
-# PROPERTY DROPDOWN SELECTOR
-# ================================================================
-property_names = [p["name"] for p in PORTFOLIO]
-selected_name = st.selectbox(
-    "Select a Property",
-    options=property_names,
-    index=0,
-    key="portfolio_property_selector",
-)
-
-# Find the selected property
-prop = next(p for p in PORTFOLIO if p["name"] == selected_name)
-
-
-# ================================================================
-# RENDER: SELECTED PROPERTY CARD
+# SELECTED PROPERTY CARD
 # ================================================================
 status_lower = prop["status"].lower()
 badge_cls = (
@@ -506,7 +576,7 @@ card_html = f"""
 """
 st.markdown(card_html, unsafe_allow_html=True)
 
-# --- Centered nav button below the card ---
+# --- Centered "View Full Details" button ---
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 _, center_col, _ = st.columns([1, 2, 1])
 with center_col:
