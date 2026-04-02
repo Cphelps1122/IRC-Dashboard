@@ -303,7 +303,7 @@ def fmt_pct(v: Optional[float]) -> str:
 
 
 # =========================================================================
-# 7.  RENDER FUNCTIONS
+# 7.  RENDER FUNCTIONS  (native Streamlit components — no complex HTML)
 # =========================================================================
 
 def render_summary_bar(cards: List[PropertyCard]):
@@ -323,87 +323,53 @@ def render_summary_bar(cards: List[PropertyCard]):
 
 
 def render_property_card(card: PropertyCard):
-    """Single property card — centered, max-width 720 px."""
+    """Single property card using native Streamlit components."""
 
-    yoy_html = ""
-    if card.yoy_change is not None:
-        yoy_color = "#ef4444" if card.yoy_change > 0 else "#10b981"
-        yoy_arrow = "▲" if card.yoy_change > 0 else "▼"
-        yoy_html = (
-            f'<span style="color:{yoy_color};font-weight:600;">'
-            f'{yoy_arrow} {fmt_pct(card.yoy_change)}</span>'
-        )
-    else:
-        yoy_html = '<span style="color:#94a3b8;">N/A</span>'
+    # ── outer container ─────────────────────────────────────────────────
+    with st.container(border=True):
 
-    spark_html = sparkline_img(card.value_history, card.sparkline_color)
+        # ── Header row: property name + status badge ────────────────────
+        hdr_left, hdr_right = st.columns([4, 1])
+        with hdr_left:
+            st.subheader(card.name)
+        with hdr_right:
+            badge_bg = card.status_color + "22"   # ~13 % opacity
+            badge_html = (
+                f'<div style="text-align:right;padding-top:8px;">'
+                f'<span style="display:inline-flex;align-items:center;gap:6px;'
+                f'padding:4px 14px;border-radius:999px;font-size:.82rem;'
+                f'font-weight:600;background:{badge_bg};color:{card.status_color};">'
+                f'<span style="width:8px;height:8px;border-radius:50%;'
+                f'background:{card.status_color};display:inline-block;"></span>'
+                f'{card.status}</span></div>'
+            )
+            st.markdown(badge_html, unsafe_allow_html=True)
 
-    status_bg = card.status_color + "22"   # ~13 % opacity hex
-    status_dot = card.status_color
+        # ── KPI row ────────────────────────────────────────────────────
+        k1, k2, k3, k4 = st.columns(4)
 
-    html = f"""
-    <div style="
-        max-width:720px; margin:1.5rem auto; padding:28px 32px;
-        background:#ffffff; border:1px solid #e2e8f0; border-radius:16px;
-        box-shadow:0 2px 8px rgba(0,0,0,.06); font-family:sans-serif;">
+        with k1:
+            st.metric("Total Cost", fmt_dollar(card.total_cost))
+        with k2:
+            st.metric("Avg Monthly", fmt_dollar(card.avg_monthly))
+        with k3:
+            st.metric("Total Usage", fmt_number(card.total_usage))
+        with k4:
+            if card.yoy_change is not None:
+                arrow = "▲" if card.yoy_change > 0 else "▼"
+                yoy_display = f"{arrow} {fmt_pct(card.yoy_change)}"
+                st.metric("YoY Change", yoy_display)
+            else:
+                st.metric("YoY Change", "N/A")
 
-        <!-- Header row -->
-        <div style="display:flex; justify-content:space-between; align-items:center;
-                    margin-bottom:20px;">
-            <h3 style="margin:0; font-size:1.35rem; color:#1e293b;">{card.name}</h3>
-            <span style="
-                display:inline-flex; align-items:center; gap:6px;
-                padding:4px 14px; border-radius:999px; font-size:.82rem;
-                font-weight:600; background:{status_bg}; color:{card.status_color};">
-                <span style="width:8px;height:8px;border-radius:50%;
-                             background:{status_dot};display:inline-block;"></span>
-                {card.status}
-            </span>
-        </div>
+        # ── Sparkline ──────────────────────────────────────────────────
+        spark = sparkline_img(card.value_history, card.sparkline_color)
+        if spark:
+            st.caption("Monthly Cost Trend")
+            st.markdown(spark, unsafe_allow_html=True)
 
-        <!-- KPI grid -->
-        <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:16px;
-                    margin-bottom:20px;">
-            <div>
-                <div style="font-size:.75rem;color:#64748b;text-transform:uppercase;
-                            letter-spacing:.04em;">Total Cost</div>
-                <div style="font-size:1.15rem;font-weight:700;color:#1e293b;margin-top:2px;">
-                    {fmt_dollar(card.total_cost)}</div>
-            </div>
-            <div>
-                <div style="font-size:.75rem;color:#64748b;text-transform:uppercase;
-                            letter-spacing:.04em;">Avg Monthly</div>
-                <div style="font-size:1.15rem;font-weight:700;color:#1e293b;margin-top:2px;">
-                    {fmt_dollar(card.avg_monthly)}</div>
-            </div>
-            <div>
-                <div style="font-size:.75rem;color:#64748b;text-transform:uppercase;
-                            letter-spacing:.04em;">Total Usage</div>
-                <div style="font-size:1.15rem;font-weight:700;color:#1e293b;margin-top:2px;">
-                    {fmt_number(card.total_usage)}</div>
-            </div>
-            <div>
-                <div style="font-size:.75rem;color:#64748b;text-transform:uppercase;
-                            letter-spacing:.04em;">YoY Change</div>
-                <div style="font-size:1.15rem;font-weight:700;margin-top:2px;">
-                    {yoy_html}</div>
-            </div>
-        </div>
-
-        <!-- Sparkline -->
-        <div style="margin-bottom:14px;">
-            <div style="font-size:.75rem;color:#64748b;margin-bottom:4px;">
-                Monthly Cost Trend</div>
-            {spark_html}
-        </div>
-
-        <!-- Footer -->
-        <div style="font-size:.78rem;color:#94a3b8;">
-            Last Billed: {card.last_billing}
-        </div>
-    </div>
-    """
-    st.markdown(html, unsafe_allow_html=True)
+        # ── Footer ─────────────────────────────────────────────────────
+        st.caption(f"Last Billed: {card.last_billing}")
 
 
 # =========================================================================
@@ -440,24 +406,26 @@ def main():
     # ── FILTERS  (side by side) ─────────────────────────────────────────
     fcol1, fcol2 = st.columns(2)
 
-    # Utility filter
-    utility_options = ["Select All"]
-    if util_col:
-        raw_utils = sorted(df[util_col].dropna().unique().tolist())
-        utility_options += raw_utils
+    # ── Utility Type dropdown (hardcoded options) ───────────────────────
+    UTILITY_OPTIONS = ["Select All", "Water", "Electric", "Gas", "Sewage"]
 
     with fcol1:
-        sel_utility = st.selectbox("Filter by Utility", utility_options, index=0)
+        sel_utility = st.selectbox("Utility Type", UTILITY_OPTIONS, index=0)
 
-    # apply utility filter
+    # apply utility filter (case-insensitive)
     df_filtered = df.copy()
     if sel_utility != "Select All" and util_col:
-        df_filtered = df_filtered[df_filtered[util_col] == sel_utility]
+        df_filtered = df_filtered[
+            df_filtered[util_col].str.strip().str.lower()
+            == sel_utility.strip().lower()
+        ]
 
-    # Property dropdown
+    # Property dropdown (repopulates based on utility filter)
     properties = sorted(df_filtered[prop_col].dropna().unique().tolist())
     if not properties:
-        st.info("No properties found for the selected utility filter.")
+        with fcol2:
+            st.selectbox("Select Property", ["No properties found"], disabled=True)
+        st.info("No properties match the selected utility type.")
         return
 
     with fcol2:
