@@ -1,532 +1,583 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import io, base64, calendar
+from dataclasses import dataclass, field
+from typing import List, Optional
+from datetime import datetime
+
 from utils.load_data import load_data
 
-# ================================================================
-# PAGE CONFIG
-# ================================================================
-st.set_page_config(
-    page_title="Property Portfolio",
-    page_icon="🏢",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+# ─── Page config (must be first Streamlit command) ────────
+st.set_page_config(page_title="Property Portfolio", layout="wide")
 
-# ================================================================
-# LOAD LIVE DATA FROM GOOGLE SHEETS
-# ================================================================
-df, last_updated = load_data()
 
-if df.empty:
-    st.error("No data returned from Google Sheets.")
-    st.stop()
+# ═══════════════════════════════════════════════════════════
+#  COLUMN DETECTION
+# ═══════════════════════════════════════════════════════════
 
-# ================================================================
-# COLUMN DETECTION
-# ================================================================
-_prop_candidates = [
-    "Property Name",
-    "Property",
-    "Account",
-    "Location",
-    "Site",
-    "Address",
-    "Building",
-    "Facility",
-    "Name",
-]
+def detect_column(df: pd.DataFrame, candidates: list) -> Optional[str]:
+    """Return the first column name from *candidates* that exists in df."""
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
 
-PROP_COL = None
-for candidate in _prop_candidates:
-    match = [c for c in df.columns if c.strip().lower() == candidate.lower()]
-    if match:
-        PROP_COL = match[0]
-        break
 
-if PROP_COL is None:
-    st.error(
-        f"⚠️ Could not auto-detect the property name column.\n\n"
-        f"**Your columns:** {list(df.columns)}\n\n"
-        f"Add your property column name to the `_prop_candidates` list near line 30."
+# ═══════════════════════════════════════════════════════════
+#  ENSURE YEAR / MONTH / MONTH_NUM
+#  ─ Uses the sheet's own Month & Year columns first.
+#  ─ Falls back to Billing Date ONLY if those are missing
+#    or mostly empty.
+# ═══════════════════════════════════════════════════════════
+
+MONTH_MAP: dict = {}
+for _i in range(1, 13):
+    MONTH_MAP[calendar.month_name[_i].lower()]  = _i   # january → 1
+    MONTH_MAP[calendar.month_abbr[_i].lower()]  = _i   # jan → 1
+    MONTH_MAP[str(_i)]                          = _i   # "1"  → 1
+    MONTH_MAP[str(_i).zfill(2)]                 = _i   # "01" → 1
+
+
+def _parse_month_num(val):
+    """Convert a single Month cell → int 1-12  or  NaN."""
+    if pd.isna(val):
+        return np.nan
+    s = str(val).strip().lower()
+    if s in MONTH_MAP:
+        return MONTH_MAP[s]
+    try:
+        n = int(float(s))
+        if 1 <= n <= 12:
+            return n
+    except (ValueError, TypeError):
+        pass
+    return np.nan
+
+
+def ensure_year_month(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Guarantee *Year* (numeric), *Month* (str name), and *Month_Num*
+    (int 1-12) columns exist in df.
+
+    Priority order:
+      1. Sheet's own Year / Month columns  (Christopher's preference)
+      2. Billing Date  (fallback only if #1 missing or >50 % NaN)
+    """
+    df = df.copy()
+
+    has_year  = "Year"  in df.columns
+    has_month = "Month" in df.columns
+    has_bd    = "Billing Date" in df.columns
+
+    # ── Year ──────────────────────────────────────────────
+    if has_year:
+        df["Year"] = pd.to_numeric(df["Year"], errors="coerce")
+        if df["Year"].isna().mean() > 0.5 and has_bd:
+            df["Year"] = pd.to_datetime(
+                df["Billing Date"], errors="coerce"
+            ).dt.year
+    elif has_bd:
+        df["Year"] = pd.to_datetime(
+            df["Billing Date"], errors="coerce"
+        ).dt.year
+    else:
+        df["Year"] = np.nan
+
+    # ── Month_Num ─────────────────────────────────────────
+    if has_month:
+        df["Month_Num"] = df["Month"].apply(_parse_month_num)
+        if df["Month_Num"].isna().mean() > 0.5 and has_bd:
+            df["Month_Num"] = pd.to_datetime(
+                df["Billing Date"], errors="coerce"
+            ).dt.month
+    elif has_bd:
+        df["Month_Num"] = pd.to_datetime(
+            df["Billing Date"], errors="coerce"
+        ).dt.month
+    else:
+        df["Month_Num"] = np.nan
+
+    # ── Month (name string) ──────────────────────────────
+    if "Month" not in df.columns or df["Month"].isna().all():
+        df["Month"] = df["Month_Num"].apply(
+            lambda x: calendar.month_name[int(x)]
+            if pd.notna(x) and 1 <= int(x) <= 12
+            else np.nan
+        )
+
+    # ── Final coerce ──────────────────────────────────────
+    df["Year"]      = pd.to_numeric(df["Year"],      errors="coerce")
+    df["Month_Num"] = pd.to_numeric(df["Month_Num"], errors="coerce")
+
+    return df
+
+
+# ═══════════════════════════════════════════════════════════
+#  DATA CLASS
+# ═══════════════════════════════════════════════════════════
+
+@dataclass
+class PropertyCard:
+    name:          str
+    total_cost:    float            = 0.0
+    avg_monthly:   float            = 0.0
+    total_usage:   float            = 0.0
+    yoy_change:    Optional[float]  = None
+    status:        str              = "Inactive"
+    value_history: list             = field(default_factory=list)
+    last_billing:  str              = "N/A"
+
+
+# ═══════════════════════════════════════════════════════════
+#  BUILD PORTFOLIO
+# ═══════════════════════════════════════════════════════════
+
+def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
+    """
+    Build one PropertyCard per unique property in *df*.
+    Expects ensure_year_month() to have already run.
+    """
+    prop_col = detect_column(df, [
+        "Property Name", "Property", "Account", "Location",
+        "Site", "Address", "Building", "Facility", "Name",
+    ])
+    if prop_col is None or df.empty:
+        return []
+
+    amt_col   = "$ Amount" if "$ Amount" in df.columns else None
+    usage_col = "Usage"    if "Usage"    in df.columns else None
+
+    now           = datetime.now()
+    current_year  = now.year
+    current_month = now.month
+
+    cards: List[PropertyCard] = []
+
+    for name, grp in df.groupby(prop_col):
+        if pd.isna(name) or str(name).strip() == "":
+            continue
+
+        card = PropertyCard(name=str(name).strip())
+
+        # Keep only rows where Year & Month_Num are usable
+        valid = grp.dropna(subset=["Year", "Month_Num"]).copy()
+
+        # ── Total cost ────────────────────────────────────
+        if amt_col and amt_col in valid.columns and not valid.empty:
+            card.total_cost = valid[amt_col].sum()
+            n_months = valid.drop_duplicates(
+                subset=["Year", "Month_Num"]
+            ).shape[0]
+            card.avg_monthly = (
+                card.total_cost / n_months if n_months > 0 else 0.0
+            )
+
+        # ── Total usage ───────────────────────────────────
+        if usage_col and usage_col in valid.columns and not valid.empty:
+            card.total_usage = valid[usage_col].sum()
+
+        # ── YoY change (current-yr vs prior-yr) ──────────
+        if amt_col and not valid.empty:
+            years = sorted(valid["Year"].dropna().unique())
+            if len(years) >= 2:
+                max_yr  = int(years[-1])
+                prev_yr = int(years[-2])
+                curr_sum = valid.loc[valid["Year"] == max_yr, amt_col].sum()
+                prev_sum = valid.loc[valid["Year"] == prev_yr, amt_col].sum()
+                if prev_sum > 0:
+                    card.yoy_change = (
+                        (curr_sum - prev_sum) / prev_sum
+                    ) * 100
+
+        # ── Status ────────────────────────────────────────
+        if not valid.empty:
+            try:
+                last_year  = int(valid["Year"].max())
+                last_month = int(
+                    valid.loc[valid["Year"] == last_year, "Month_Num"].max()
+                )
+                months_since = (
+                    (current_year - last_year) * 12
+                    + (current_month - last_month)
+                )
+                if months_since <= 3:
+                    card.status = "Active"
+                elif months_since <= 6:
+                    card.status = "Pending"
+                else:
+                    card.status = "Inactive"
+
+                card.last_billing = (
+                    f"{calendar.month_abbr[last_month]} {last_year}"
+                )
+            except (ValueError, TypeError):
+                card.status = "Inactive"
+        else:
+            # Last-resort: try Billing Date for status
+            if "Billing Date" in grp.columns:
+                bd = pd.to_datetime(
+                    grp["Billing Date"], errors="coerce"
+                ).dropna()
+                if not bd.empty:
+                    last_bd = bd.max()
+                    ms = (
+                        (current_year - last_bd.year) * 12
+                        + (current_month - last_bd.month)
+                    )
+                    if ms <= 3:
+                        card.status = "Active"
+                    elif ms <= 6:
+                        card.status = "Pending"
+                    card.last_billing = last_bd.strftime("%b %Y")
+
+        # ── Sparkline data (up to last 12 months) ────────
+        if amt_col and not valid.empty:
+            spark = (
+                valid
+                .groupby(["Year", "Month_Num"])[amt_col]
+                .sum()
+                .reset_index()
+                .sort_values(["Year", "Month_Num"])
+            )
+            card.value_history = spark[amt_col].tolist()[-12:]
+        elif amt_col and amt_col in grp.columns:
+            card.value_history = (
+                grp[amt_col].dropna().tolist()[-12:]
+            )
+
+        cards.append(card)
+
+    # Sort: Active → Pending → Inactive, then alphabetical
+    order = {"Active": 0, "Pending": 1, "Inactive": 2}
+    cards.sort(key=lambda c: (order.get(c.status, 3), c.name))
+
+    return cards
+
+
+# ═══════════════════════════════════════════════════════════
+#  SPARKLINE GENERATOR  (Agg backend + RGBA tuples)
+# ═══════════════════════════════════════════════════════════
+
+def generate_sparkline(data: list) -> str:
+    """Return a base64-encoded PNG sparkline."""
+    if not data or len(data) < 2:
+        return ""
+
+    fig, ax = plt.subplots(figsize=(2.2, 0.6))
+    fig.patch.set_alpha(0.0)
+    ax.set_facecolor((0, 0, 0, 0))
+
+    x = list(range(len(data)))
+    line_c = (0.08, 0.42, 0.85, 1.0)     # solid blue
+    fill_c = (0.08, 0.42, 0.85, 0.12)    # translucent blue
+
+    ax.plot(x, data, color=line_c, linewidth=1.5)
+    ax.fill_between(x, data, min(data), color=fill_c)
+
+    ax.axis("off")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+
+    buf = io.BytesIO()
+    fig.savefig(
+        buf, format="png", dpi=120,
+        transparent=True, bbox_inches="tight", pad_inches=0,
     )
-    st.stop()
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
 
-_util_candidates = ["Utility", "Utility Type", "Service", "Type", "Service Type"]
-UTIL_COL = None
-for candidate in _util_candidates:
-    match = [c for c in df.columns if c.strip().lower() == candidate.lower()]
-    if match:
-        UTIL_COL = match[0]
-        break
 
-# ================================================================
-# GLOBAL CSS
-# ================================================================
-GLOBAL_CSS = """
+# ═══════════════════════════════════════════════════════════
+#  FORMAT HELPERS  (full numbers — NO "K" abbreviation)
+# ═══════════════════════════════════════════════════════════
+
+def fmt_dollar(val: float) -> str:
+    return f"${val:,.2f}"
+
+def fmt_number(val: float) -> str:
+    if val == int(val):
+        return f"{int(val):,}"
+    return f"{val:,.2f}"
+
+def fmt_pct(val: Optional[float]) -> str:
+    if val is None:
+        return "N/A"
+    sign = "+" if val >= 0 else ""
+    return f"{sign}{val:.1f}%"
+
+
+# ═══════════════════════════════════════════════════════════
+#  CSS
+# ═══════════════════════════════════════════════════════════
+
+CARD_CSS = """
 <style>
-.block-container { padding-top: 1.5rem !important; }
-
+/* ── Summary bar ── */
 .summary-bar {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-    gap: 12px;
-    background: linear-gradient(135deg, #1a1d27 0%, #252839 100%);
-    border: 1px solid #2a2d3a;
-    border-radius: 14px;
-    padding: 20px 24px;
-    margin-bottom: 24px;
-    box-shadow: 0 2px 12px rgba(0,0,0,.4);
+    display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;
 }
-.summary-metric {
-    display: flex; flex-direction: column; gap: 3px;
-    position: relative; padding-right: 14px;
+.summary-item {
+    flex: 1; min-width: 160px; background: #0E1117;
+    border: 1px solid #1E2A3A; border-radius: 10px;
+    padding: 1rem 1.2rem; text-align: center;
 }
-.summary-metric:not(:last-child)::after {
-    content: ''; position: absolute; right: 0; top: 4px; bottom: 4px;
-    width: 1px; background: #2a2d3a;
+.summary-label {
+    font-size: 0.75rem; color: #8899AA;
+    text-transform: uppercase; letter-spacing: 0.5px;
 }
-.sum-label  { font-size: .7rem; font-weight: 600; text-transform: uppercase;
-              letter-spacing: .08em; color: #6b7280; }
-.sum-value  { font-size: 1.45rem; font-weight: 700; color: #ffffff; line-height: 1.2; }
-.sum-delta  { font-size: .76rem; font-weight: 600; }
-.sum-delta.up   { color: #34d399; }
-.sum-delta.down { color: #f87171; }
+.summary-value {
+    font-size: 1.35rem; font-weight: 700;
+    color: #FFFFFF; margin-top: 4px;
+}
 
+/* ── Property card ── */
 .prop-card {
-    background: #1e2130; border: 1px solid #2a2d3a;
-    border-radius: 14px; padding: 28px 32px 24px;
-    display: flex; flex-direction: column; gap: 18px;
-    position: relative; overflow: hidden;
-    max-width: 720px; margin: 0 auto;
-    transition: all .25s ease;
+    background: linear-gradient(135deg, #0E1117 0%, #131A24 100%);
+    border: 1px solid #1E2A3A; border-radius: 14px;
+    padding: 1.8rem 2rem; margin-top: 0.5rem;
 }
-.prop-card::before {
-    content: ''; position: absolute; top: 0; left: 0; right: 0;
-    height: 3px; background: #3d8bfd;
+.card-header {
+    display: flex; justify-content: space-between;
+    align-items: center; margin-bottom: 1.2rem;
 }
-.card-hdr   { display: flex; justify-content: space-between; align-items: flex-start; }
-.card-title { font-size: 1.25rem; font-weight: 700; color: #ffffff; line-height: 1.3; }
-.card-addr  { font-size: .8rem; color: #6b7280; margin-top: 2px; }
-.badge      { font-size: .7rem; font-weight: 700; text-transform: uppercase;
-              letter-spacing: .06em; padding: 5px 12px; border-radius: 20px;
-              white-space: nowrap; flex-shrink: 0; }
-.badge-active   { background: rgba(52,211,153,.12);  color: #34d399; }
-.badge-pending  { background: rgba(251,191,36,.12);  color: #fbbf24; }
-.badge-inactive { background: rgba(248,113,113,.12); color: #f87171; }
-.badge-unknown  { background: rgba(107,114,128,.12); color: #6b7280; }
-
-.kpi-strip {
-    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
-    padding: 16px 0; border-top: 1px solid #2a2d3a; border-bottom: 1px solid #2a2d3a;
+.card-title {
+    font-size: 1.3rem; font-weight: 700; color: #FFFFFF;
 }
-.kpi-label { font-size: .7rem; font-weight: 600; text-transform: uppercase;
-             letter-spacing: .06em; color: #6b7280; }
-.kpi-val   { font-size: 1.2rem; font-weight: 700; color: #e8eaed; }
-.kpi-val.pos { color: #34d399; }
-.kpi-val.neg { color: #f87171; }
 
-.spark-row   { display: flex; align-items: center; gap: 14px; }
-.spark-lbl   { font-size: .76rem; color: #6b7280; white-space: nowrap; flex-shrink: 0; }
-.spark-chart { flex: 1; height: 48px; min-width: 0; }
-.spark-chart svg { width: 100%; height: 100%; }
+.badge {
+    font-size: 0.7rem; font-weight: 600;
+    padding: 4px 12px; border-radius: 20px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+.badge-active {
+    background: rgba(0,210,120,0.15); color: #00D278;
+    border: 1px solid rgba(0,210,120,0.30);
+}
+.badge-pending {
+    background: rgba(255,180,0,0.15); color: #FFB400;
+    border: 1px solid rgba(255,180,0,0.30);
+}
+.badge-inactive {
+    background: rgba(255,60,60,0.12); color: #FF5252;
+    border: 1px solid rgba(255,60,60,0.25);
+}
 
-.card-foot    { display: flex; justify-content: space-between; align-items: center; padding-top: 4px; }
-.card-updated { font-size: .74rem; color: #6b7280; }
+.card-metrics {
+    display: flex; gap: 1.5rem; flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+.metric-block { flex: 1; min-width: 130px; }
+.metric-label {
+    font-size: 0.72rem; color: #8899AA;
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+.metric-value {
+    font-size: 1.15rem; font-weight: 700;
+    color: #FFFFFF; margin-top: 2px;
+}
 
-.util-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
-.util-tag  { font-size: .66rem; font-weight: 600; padding: 3px 10px;
-             border-radius: 4px; background: rgba(61,139,253,.1); color: #3d8bfd;
-             text-transform: uppercase; letter-spacing: .04em; }
+.yoy-up   { color: #FF5252; }
+.yoy-down { color: #00D278; }
+.yoy-na   { color: #8899AA; }
 
-.filter-label { font-size: .82rem; font-weight: 600; color: #9aa0b0;
-                margin-bottom: 2px; text-transform: uppercase; letter-spacing: .05em; }
+.spark-row   { margin-top: 0.5rem; }
+.spark-label {
+    font-size: 0.72rem; color: #8899AA;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
 
-.no-data-msg { text-align: center; padding: 48px 24px; color: #6b7280;
-               font-size: 1rem; background: #1e2130; border: 1px dashed #2a2d3a;
-               border-radius: 14px; max-width: 720px; margin: 0 auto; }
-
-@media (max-width: 540px) {
-    .summary-bar  { grid-template-columns: repeat(2, 1fr); }
-    .kpi-strip    { grid-template-columns: repeat(2, 1fr); }
-    .prop-card    { padding: 20px; }
+.last-billing {
+    font-size: 0.72rem; color: #556677;
+    margin-top: 0.8rem; text-align: right;
 }
 </style>
 """
-st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
 
-# ================================================================
-# SPARKLINE SVG GENERATOR
-# ================================================================
-def make_sparkline(data: list, width: int = 200, height: int = 48) -> str:
-    if not data or len(data) < 2:
-        return ""
-    mn = min(data)
-    mx = max(data)
-    rng = mx - mn if mx != mn else 1
-    pad = 4
-    uh = height - pad * 2
-    pts = []
-    for i, v in enumerate(data):
-        x = (i / (len(data) - 1)) * width
-        y = pad + uh - ((v - mn) / rng) * uh
-        pts.append(f"{x:.1f},{y:.1f}")
-    polyline = " ".join(pts)
-    fill_poly = f"0,{height} {polyline} {width},{height}"
-    trend_clr = "#34d399" if data[-1] <= data[0] else "#f87171"
-    last_x = width
-    last_y = pad + uh - ((data[-1] - mn) / rng) * uh
-    grad_id = f"sg{abs(hash(tuple(data))) % 99999}"
-    return (
-        f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" '
-        f'xmlns="http://www.w3.org/2000/svg">'
-        f'<defs><linearGradient id="{grad_id}" x1="0" y1="0" x2="0" y2="1">'
-        f'<stop offset="0%" stop-color="{trend_clr}" stop-opacity=".25"/>'
-        f'<stop offset="100%" stop-color="{trend_clr}" stop-opacity="0"/>'
-        f'</linearGradient></defs>'
-        f'<polygon points="{fill_poly}" fill="url(#{grad_id})"/>'
-        f'<polyline points="{polyline}" fill="none" stroke="{trend_clr}" '
-        f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
-        f'<circle cx="{last_x}" cy="{last_y:.1f}" r="3" fill="{trend_clr}"/>'
-        f'</svg>'
-    )
 
-# ================================================================
-# FORMATTERS — *** FULL NUMBERS, NO "K" ABBREVIATION ***
-# ================================================================
-def fmt_currency(v):
-    return f"${v:,.2f}"
+# ═══════════════════════════════════════════════════════════
+#  RENDER FUNCTIONS
+# ═══════════════════════════════════════════════════════════
 
-def fmt_currency_full(v):
-    return f"${v:,.2f}"
+def render_summary_bar(cards: List[PropertyCard]):
+    total_cost   = sum(c.total_cost  for c in cards)
+    total_usage  = sum(c.total_usage for c in cards)
+    active_count = sum(1 for c in cards if c.status == "Active")
+    total_props  = len(cards)
 
-def fmt_usage(v):
-    return f"{v:,.0f}"
+    html = f"""
+    <div class="summary-bar">
+        <div class="summary-item">
+            <div class="summary-label">Total Properties</div>
+            <div class="summary-value">{total_props}</div>
+        </div>
+        <div class="summary-item">
+            <div class="summary-label">Active</div>
+            <div class="summary-value">{active_count}</div>
+        </div>
+        <div class="summary-item">
+            <div class="summary-label">Portfolio Cost</div>
+            <div class="summary-value">{fmt_dollar(total_cost)}</div>
+        </div>
+        <div class="summary-item">
+            <div class="summary-label">Total Usage</div>
+            <div class="summary-value">{fmt_number(total_usage)}</div>
+        </div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
 
-# ================================================================
-# AGGREGATE FUNCTION — Uses Month / Year columns (NOT Billing Date)
-# ================================================================
-def build_portfolio(data):
-    now = pd.Timestamp.now()
-    current_year  = now.year
-    current_month = now.month
-    portfolio = []
 
-    for prop_name, grp in data.groupby(PROP_COL):
+def render_property_card(card: PropertyCard):
+    badge_cls = {
+        "Active":   "badge-active",
+        "Pending":  "badge-pending",
+        "Inactive": "badge-inactive",
+    }.get(card.status, "badge-inactive")
 
-        # --- Ensure we have Year and Month columns ---
-        if "Year" not in grp.columns or "Month" not in grp.columns:
-            continue
+    yoy_cls = "yoy-na"
+    yoy_str = fmt_pct(card.yoy_change)
+    if card.yoy_change is not None:
+        yoy_cls = "yoy-up" if card.yoy_change > 0 else "yoy-down"
 
-        # Build a Month_Num column if not already present
-        if "Month_Num" in grp.columns:
-            grp = grp.copy()
-        else:
-            grp = grp.copy()
-            month_map = {
-                "january": 1, "february": 2, "march": 3,
-                "april": 4,   "may": 5,      "june": 6,
-                "july": 7,    "august": 8,    "september": 9,
-                "october": 10,"november": 11, "december": 12,
-            }
-            grp["Month_Num"] = (
-                grp["Month"]
-                .astype(str)
-                .str.strip()
-                .str.lower()
-                .map(month_map)
-            )
-            # If mapping failed (already numeric), try direct conversion
-            if grp["Month_Num"].isna().all():
-                grp["Month_Num"] = pd.to_numeric(grp["Month"], errors="coerce")
+    sparkline_html = ""
+    if card.value_history and len(card.value_history) >= 2:
+        src = generate_sparkline(card.value_history)
+        if src:
+            n = len(card.value_history)
+            sparkline_html = f"""
+            <div class="spark-row">
+                <div class="spark-label">Monthly Trend (last {n} mo)</div>
+                <img src="data:image/png;base64,{src}"
+                     style="width:100%;max-width:320px;height:auto;" />
+            </div>
+            """
 
-        grp["Year"] = pd.to_numeric(grp["Year"], errors="coerce")
-        grp = grp.dropna(subset=["Year", "Month_Num"])
+    html = f"""
+    <div class="prop-card">
+        <div class="card-header">
+            <div class="card-title">{card.name}</div>
+            <span class="badge {badge_cls}">{card.status}</span>
+        </div>
+        <div class="card-metrics">
+            <div class="metric-block">
+                <div class="metric-label">Total Cost</div>
+                <div class="metric-value">{fmt_dollar(card.total_cost)}</div>
+            </div>
+            <div class="metric-block">
+                <div class="metric-label">Avg Monthly</div>
+                <div class="metric-value">{fmt_dollar(card.avg_monthly)}</div>
+            </div>
+            <div class="metric-block">
+                <div class="metric-label">Total Usage</div>
+                <div class="metric-value">{fmt_number(card.total_usage)}</div>
+            </div>
+            <div class="metric-block">
+                <div class="metric-label">YoY Change</div>
+                <div class="metric-value {yoy_cls}">{yoy_str}</div>
+            </div>
+        </div>
+        {sparkline_html}
+        <div class="last-billing">Last billing: {card.last_billing}</div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
 
-        # ── FIX: skip this property if every row was NaN ──
-        if grp.empty:
-            continue
 
-        grp["Year"]      = grp["Year"].astype(int)
-        grp["Month_Num"] = grp["Month_Num"].astype(int)
+# ═══════════════════════════════════════════════════════════
+#  MAIN
+# ═══════════════════════════════════════════════════════════
 
-        # Sort by Year then Month_Num
-        grp = grp.sort_values(["Year", "Month_Num"])
+st.markdown(CARD_CSS, unsafe_allow_html=True)
+st.title("Property Portfolio")
 
-        # --- Total cost & usage (all time) ---
-        total_cost  = grp["$ Amount"].sum() if "$ Amount" in grp.columns else 0
-        total_usage = grp["Usage"].sum()    if "Usage" in grp.columns else 0
-        bill_count  = len(grp)
+# ── Load data ─────────────────────────────────────────────
+df, last_updated = load_data()
 
-        # --- 12-month window using Year / Month_Num ---
-        grp["_period"]   = grp["Year"] * 12 + grp["Month_Num"]
-        current_period   = current_year * 12 + current_month
-        twelve_ago       = current_period - 11          # inclusive of current month
-        twentyfour_ago   = current_period - 23
+if df.empty:
+    st.warning("No data returned from Google Sheets.")
+    st.stop()
 
-        recent   = grp[grp["_period"].between(twelve_ago, current_period)]
-        cost_12m = recent["$ Amount"].sum() if "$ Amount" in recent.columns else 0
-        avg_monthly = cost_12m / max(len(recent["_period"].unique()), 1)
+st.caption(f"Last updated: {last_updated}")
 
-        # --- Prior 12-month window (for YoY) ---
-        prior      = grp[grp["_period"].between(twentyfour_ago, twelve_ago - 1)]
-        cost_prior = prior["$ Amount"].sum() if not prior.empty and "$ Amount" in prior.columns else 0
+# ── Ensure Year / Month / Month_Num exist ─────────────────
+df = ensure_year_month(df)
 
-        if cost_prior > 0:
-            yoy_change = round(((cost_12m - cost_prior) / cost_prior) * 100, 1)
-        else:
-            yoy_change = 0.0
+# ── Detect key columns ────────────────────────────────────
+PROP_COL = detect_column(df, [
+    "Property Name", "Property", "Account", "Location",
+    "Site", "Address", "Building", "Facility", "Name",
+])
+UTIL_COL = detect_column(df, [
+    "Utility", "Utility Type", "Service", "Type", "Service Type",
+])
 
-        # --- Monthly cost history for sparkline (group by Year + Month_Num) ---
-        cost_history = []
-        if "$ Amount" in grp.columns:
-            recent_for_spark = recent.copy() if not recent.empty else grp.copy()
-            monthly = (
-                recent_for_spark
-                .groupby(["Year", "Month_Num"])["$ Amount"]
-                .sum()
-                .sort_index()
-            )
-            cost_history = monthly.tolist()
-
-        # If still < 2 data points, use full history
-        if len(cost_history) < 2 and "$ Amount" in grp.columns:
-            monthly = (
-                grp
-                .groupby(["Year", "Month_Num"])["$ Amount"]
-                .sum()
-                .sort_index()
-            )
-            cost_history = monthly.tolist()
-
-        # --- Status based on most recent Year/Month vs now ---
-        last_year  = int(grp["Year"].max())
-        last_month = int(grp.loc[grp["Year"] == last_year, "Month_Num"].max())
-        months_since = (current_year - last_year) * 12 + (current_month - last_month)
-
-        if months_since <= 3:
-            status = "Active"
-        elif months_since <= 6:
-            status = "Pending"
-        else:
-            status = "Inactive"
-
-        # Build readable "last bill" label from Year/Month
-        try:
-            month_names = [
-                "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-            ]
-            last_bill_str = f"{month_names[last_month]} {last_year}"
-        except Exception:
-            last_bill_str = f"{last_month}/{last_year}"
-
-        # --- Utilities list ---
-        utilities = []
-        if UTIL_COL and UTIL_COL in grp.columns:
-            utilities = grp[UTIL_COL].dropna().unique().tolist()
-
-        portfolio.append({
-            "id":           str(prop_name).lower().replace(" ", "-").replace("/", "-"),
-            "name":         str(prop_name),
-            "status":       status,
-            "total_cost":   round(total_cost, 2),
-            "avg_monthly":  round(avg_monthly, 2),
-            "total_usage":  round(total_usage, 1),
-            "bill_count":   bill_count,
-            "yoy_change":   yoy_change,
-            "cost_history": cost_history,
-            "last_updated": last_bill_str,
-            "utilities":    utilities,
-        })
-
-    status_order = {"Active": 0, "Pending": 1, "Inactive": 2, "Unknown": 3}
-    portfolio.sort(key=lambda p: (status_order.get(p["status"], 9), -p["total_cost"]))
-    return portfolio
-
-# ================================================================
-# FILTER DROPDOWNS — Utility Type + Property (side-by-side)
-# ================================================================
-UTILITY_OPTIONS = ["Select All", "Water", "Electric", "Gas", "Sewage"]
-
-filter_col1, filter_col2 = st.columns(2)
-
-with filter_col1:
-    selected_utility = st.selectbox(
-        "Utility Type",
-        options=UTILITY_OPTIONS,
-        index=0,
-        key="utility_type_filter",
-    )
-
-# ================================================================
-# APPLY UTILITY FILTER BEFORE AGGREGATION
-# ================================================================
-if selected_utility == "Select All":
-    df_filtered = df.copy()
-    active_filter_label = "All Utilities"
-else:
-    if UTIL_COL:
-        df_filtered = df[
-            df[UTIL_COL].str.strip().str.lower() == selected_utility.lower()
-        ].copy()
-    else:
-        df_filtered = df.copy()
-        st.warning(
-            f"No utility type column detected in your data. "
-            f"Showing all records. Your columns: {list(df.columns)}"
-        )
-    active_filter_label = selected_utility
-
-# ================================================================
-# BUILD PORTFOLIO FROM FILTERED DATA
-# ================================================================
-PORTFOLIO = build_portfolio(df_filtered)
-
-# ================================================================
-# PROPERTY DROPDOWN — Populated from filtered results
-# ================================================================
-if not PORTFOLIO:
-    with filter_col2:
-        st.selectbox("Select a Property", options=["No properties found"], disabled=True, key="prop_disabled")
-    st.markdown(
-        f'<div class="no-data-msg">No billing data found for <strong>{active_filter_label}</strong>.</div>',
-        unsafe_allow_html=True,
+if PROP_COL is None:
+    st.error(
+        "Cannot find a property-name column in the data. "
+        "Expected one of: Property Name, Property, Account, Location, etc."
     )
     st.stop()
 
-property_names = [p["name"] for p in PORTFOLIO]
-
-with filter_col2:
-    selected_name = st.selectbox(
-        "Select a Property",
-        options=property_names,
-        index=0,
-        key="portfolio_property_selector",
+# ── Utility filter ────────────────────────────────────────
+utility_options = ["Select All"]
+if UTIL_COL:
+    utility_options += sorted(
+        df[UTIL_COL].dropna().astype(str).unique().tolist()
     )
 
-prop = next(p for p in PORTFOLIO if p["name"] == selected_name)
+col1, col2 = st.columns(2)
+with col1:
+    selected_utility = st.selectbox("Utility Type", utility_options)
 
-# ================================================================
-# SUMMARY BAR — Reflects the active utility filter
-# ================================================================
-total_spend     = sum(p["total_cost"]  for p in PORTFOLIO)
-total_usage_all = sum(p["total_usage"] for p in PORTFOLIO)
-active_count    = sum(1 for p in PORTFOLIO if p["status"] == "Active")
-prop_count      = len(PORTFOLIO)
-avg_monthly_all = sum(p["avg_monthly"] for p in PORTFOLIO)
+# ── Apply utility filter ──────────────────────────────────
+df_filtered = df.copy()
+if UTIL_COL and selected_utility != "Select All":
+    df_filtered = df_filtered[
+        df_filtered[UTIL_COL].astype(str) == selected_utility
+    ]
 
-spend_props = [p for p in PORTFOLIO if p["total_cost"] > 0]
-if spend_props and sum(p["total_cost"] for p in spend_props) > 0:
-    weighted_yoy = (
-        sum(p["yoy_change"] * p["total_cost"] for p in spend_props)
-        / sum(p["total_cost"] for p in spend_props)
-    )
-else:
-    weighted_yoy = 0.0
-
-yoy_cls   = "down" if weighted_yoy > 0 else "up"
-yoy_arrow = "▲" if weighted_yoy > 0 else "▼"
-
-summary_html = f"""
-<div class="summary-bar">
-  <div class="summary-metric">
-    <span class="sum-label">Properties</span>
-    <span class="sum-value">{prop_count}</span>
-    <span class="sum-delta up">{active_count} Active</span>
-  </div>
-  <div class="summary-metric">
-    <span class="sum-label">Total Spend (12 mo)</span>
-    <span class="sum-value">{fmt_currency_full(total_spend)}</span>
-    <span class="sum-delta {yoy_cls}">{yoy_arrow} {abs(weighted_yoy):.1f}% YoY</span>
-  </div>
-  <div class="summary-metric">
-    <span class="sum-label">Avg Monthly / Property</span>
-    <span class="sum-value">{fmt_currency(avg_monthly_all / max(prop_count, 1))}</span>
-  </div>
-  <div class="summary-metric">
-    <span class="sum-label">Total Usage</span>
-    <span class="sum-value">{fmt_usage(total_usage_all)}</span>
-  </div>
-  <div class="summary-metric">
-    <span class="sum-label">Total Bills</span>
-    <span class="sum-value">{sum(p['bill_count'] for p in PORTFOLIO):,}</span>
-  </div>
-  <div class="summary-metric">
-    <span class="sum-label">Last Updated</span>
-    <span class="sum-value" style="font-size:1rem">{last_updated}</span>
-  </div>
-</div>
-"""
-st.markdown(summary_html, unsafe_allow_html=True)
-
-# ================================================================
-# SELECTED PROPERTY CARD
-# ================================================================
-status_lower = prop["status"].lower()
-badge_cls = (
-    "badge-active"   if status_lower == "active"   else
-    "badge-pending"  if status_lower == "pending"  else
-    "badge-inactive" if status_lower == "inactive" else
-    "badge-unknown"
+# ── Property filter (repopulates on utility change) ──────
+prop_names = sorted(
+    df_filtered[PROP_COL].dropna().astype(str).unique().tolist()
 )
 
-yoy_sign  = "+" if prop["yoy_change"] > 0 else ""
-yoy_color = "#34d399" if prop["yoy_change"] <= 0 else "#f87171"
+with col2:
+    if prop_names:
+        selected_property = st.selectbox("Property", prop_names)
+    else:
+        st.selectbox("Property", ["No properties found"])
+        selected_property = None
 
-spark_svg = make_sparkline(prop["cost_history"])
+# ── Build portfolio cards ─────────────────────────────────
+PORTFOLIO = build_portfolio(df_filtered)
 
-util_tags = ""
-if prop["utilities"]:
-    tags = "".join(
-        f'<span class="util-tag">{u}</span>' for u in prop["utilities"][:6]
+if not PORTFOLIO:
+    st.warning(
+        "No portfolio data could be built from the current filters. "
+        "Check that your Google Sheet has valid Year/Month "
+        "or Billing Date values."
     )
-    util_tags = f'<div class="util-tags">{tags}</div>'
+    st.stop()
 
-card_html = f"""
-<div class="prop-card">
-  <div class="card-hdr">
-    <div>
-      <div class="card-title">{prop['name']}</div>
-      {util_tags}
-    </div>
-    <span class="badge {badge_cls}">{prop['status']}</span>
-  </div>
-  <div class="kpi-strip">
-    <div>
-      <div class="kpi-label">Total Cost</div>
-      <div class="kpi-val">{fmt_currency(prop['total_cost'])}</div>
-    </div>
-    <div>
-      <div class="kpi-label">Avg Monthly</div>
-      <div class="kpi-val">{fmt_currency(prop['avg_monthly'])}</div>
-    </div>
-    <div>
-      <div class="kpi-label">Usage</div>
-      <div class="kpi-val">{fmt_usage(prop['total_usage'])}</div>
-    </div>
-    <div>
-      <div class="kpi-label">YoY Change</div>
-      <div class="kpi-val" style="color:{yoy_color}">{yoy_sign}{prop['yoy_change']}%</div>
-    </div>
-  </div>
-  <div class="spark-row">
-    <span class="spark-lbl">12-mo cost trend</span>
-    <div class="spark-chart">{spark_svg}</div>
-  </div>
-  <div class="card-foot">
-    <span class="card-updated">Last bill {prop['last_updated']}</span>
-    <span class="card-updated">{prop['bill_count']} bills</span>
-  </div>
-</div>
-"""
-st.markdown(card_html, unsafe_allow_html=True)
+# ── Summary bar (reflects current utility filter) ────────
+render_summary_bar(PORTFOLIO)
 
-# --- Centered "View Full Details" button ---
-st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-_, center_col, _ = st.columns([1, 2, 1])
-with center_col:
-    if st.button("View Full Details →", key=f"nav_{prop['id']}", use_container_width=True):
-        st.session_state["selected_property"] = prop["name"]
+# ── Render the selected property card ─────────────────────
+selected_card = next(
+    (c for c in PORTFOLIO if c.name == selected_property), None
+)
+
+if selected_card:
+    render_property_card(selected_card)
+    st.markdown("")
+    if st.button("View Full Details →"):
         st.switch_page("pages/3_Property_Detail.py")
+else:
+    st.info("Select a property from the dropdown above to view its card.")
