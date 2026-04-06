@@ -137,6 +137,32 @@ section[data-testid="stMain"] [data-testid="stMetricLabel"] div {
 
 
 # =========================================================================
+# 0b.  UTILITY UNIT-OF-MEASURE MAP
+# =========================================================================
+
+UTILITY_UOM = {
+    "water":    "Gal",
+    "electric": "kWh",
+    "gas":      "Therms",
+    "sewage":   "Gal",
+}
+
+
+def _uom_for_utilities(utility_series: pd.Series) -> str:
+    """Return the unit of measure string for a set of utility rows.
+
+    If every row belongs to a single utility type, return that type's UOM.
+    If the group spans multiple utility types, return empty string (mixed).
+    """
+    if utility_series is None or utility_series.empty:
+        return ""
+    unique = utility_series.str.strip().str.lower().dropna().unique()
+    if len(unique) == 1:
+        return UTILITY_UOM.get(unique[0], "")
+    return ""
+
+
+# =========================================================================
 # 1.  COLUMN DETECTION  (case-insensitive, first-match)
 # =========================================================================
 
@@ -179,6 +205,7 @@ def _parse_month(val) -> Optional[int]:
     """Convert any reasonable month representation to 1-12 or None."""
     if val is None or (isinstance(val, float) and np.isnan(val)):
         return None
+    # already numeric
     if isinstance(val, (int, float)):
         v = int(val)
         return v if 1 <= v <= 12 else None
@@ -199,16 +226,19 @@ def ensure_year_month(df: pd.DataFrame) -> pd.DataFrame:
     has_year  = False
     has_month = False
 
+    # ── Year ────────────────────────────────────────────────────────────
     if year_col:
         df["Year"] = pd.to_numeric(df[year_col], errors="coerce")
         if df["Year"].notna().any():
             has_year = True
 
+    # ── Month_Num ───────────────────────────────────────────────────────
     if month_col:
         df["Month_Num"] = df[month_col].apply(_parse_month)
         if df["Month_Num"].notna().any():
             has_month = True
 
+    # ── Billing Date fallback ───────────────────────────────────────────
     if bill_col and (not has_year or not has_month):
         bd = pd.to_datetime(df[bill_col], errors="coerce")
         if not has_year:
@@ -216,6 +246,7 @@ def ensure_year_month(df: pd.DataFrame) -> pd.DataFrame:
         if not has_month:
             df["Month_Num"] = bd.dt.month
 
+    # Final safety: ensure columns exist even if all NaN
     if "Year" not in df.columns:
         df["Year"] = np.nan
     if "Month_Num" not in df.columns:
@@ -234,12 +265,13 @@ class PropertyCard:
     total_cost: float = 0.0
     avg_monthly: float = 0.0
     total_usage: float = 0.0
-    yoy_change: Optional[float] = None
-    status: str = "Inactive"
+    yoy_change: Optional[float] = None        # percent
+    status: str = "Inactive"                   # Active / Inactive
     last_billing: str = "N/A"
     value_history: List[float] = field(default_factory=list)
-    sparkline_color: str = "#10b981"
-    status_color: str = "#ef4444"
+    sparkline_color: str = "#10b981"           # green
+    status_color: str = "#ef4444"              # red
+    uom: str = ""                              # unit of measure for usage
 
 
 # =========================================================================
@@ -251,6 +283,7 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
     amt_col  = detect_column(df, ["$ Amount", "Amount", "Cost"])
     use_col  = detect_column(df, ["Usage"])
     bill_col = detect_column(df, ["Billing Date"])
+    util_col = detect_column(df, ["Utility"])
 
     if not prop_col:
         return []
@@ -265,14 +298,21 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
         try:
             card = PropertyCard(name=str(name))
 
+            # ── Unit of measure (based on utility types in group) ───────
+            if util_col and util_col in grp.columns:
+                card.uom = _uom_for_utilities(grp[util_col])
+
+            # ── Total cost ──────────────────────────────────────────────
             if amt_col and amt_col in grp.columns:
                 vals = pd.to_numeric(grp[amt_col], errors="coerce")
                 card.total_cost = float(vals.sum())
 
+            # ── Total usage ─────────────────────────────────────────────
             if use_col and use_col in grp.columns:
                 vals = pd.to_numeric(grp[use_col], errors="coerce")
                 card.total_usage = float(vals.sum())
 
+            # ── Monthly cost history (for sparkline + avg) ──────────────
             if amt_col and "Year" in grp.columns and "Month_Num" in grp.columns:
                 tmp = grp.dropna(subset=["Year", "Month_Num"]).copy()
                 if not tmp.empty:
@@ -285,9 +325,11 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                     )
                     card.value_history = monthly["_amt"].tolist()
 
+            # ── Avg monthly ─────────────────────────────────────────────
             n_months = len(card.value_history) if card.value_history else 1
             card.avg_monthly = card.total_cost / max(n_months, 1)
 
+            # ── YoY change ──────────────────────────────────────────────
             if amt_col and "Year" in grp.columns:
                 yr_totals = (
                     grp.assign(_amt=pd.to_numeric(grp[amt_col], errors="coerce"))
@@ -302,11 +344,13 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                     if prev and prev != 0:
                         card.yoy_change = ((curr - prev) / abs(prev)) * 100
 
+            # ── Status (active if billed within last 3 months) ──────────
             if "Year" in grp.columns and "Month_Num" in grp.columns:
                 tmp2 = grp.dropna(subset=["Year", "Month_Num"])
                 if not tmp2.empty:
                     last_year_val  = tmp2["Year"].max()
                     last_month_val = tmp2["Month_Num"].max()
+
                     if not pd.isna(last_year_val) and not pd.isna(last_month_val):
                         ly = int(last_year_val)
                         lm = int(last_month_val)
@@ -314,11 +358,13 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                         if months_since <= 3:
                             card.status = "Active"
 
+            # ── Last billing date ───────────────────────────────────────
             if bill_col and bill_col in grp.columns:
                 dates = pd.to_datetime(grp[bill_col], errors="coerce").dropna()
                 if not dates.empty:
                     card.last_billing = dates.max().strftime("%b %d, %Y")
 
+            # ── Colors ──────────────────────────────────────────────────
             if card.status == "Active":
                 card.status_color   = "#10b981"
                 card.sparkline_color = "#10b981"
@@ -327,13 +373,15 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                 card.sparkline_color = "#f87171"
 
             if card.yoy_change is not None and card.yoy_change > 0:
-                card.sparkline_color = "#f87171"
+                card.sparkline_color = "#f87171"   # red = costs up
 
             cards.append(card)
 
         except Exception:
+            # never let one bad property crash the whole page
             continue
 
+    # sort: Active first, then alphabetical
     cards.sort(key=lambda c: (0 if c.status == "Active" else 1, c.name))
     return cards
 
@@ -343,13 +391,14 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
 # =========================================================================
 
 def sparkline_img(data: List[float], color: str = "#10b981",
-                  width: int = 200, height: int = 48) -> str:
+                  width: int = 400, height: int = 80) -> str:
+    """Return an <img> tag containing a base64-encoded SVG sparkline."""
     if not data or len(data) < 2:
         return ""
 
     mn, mx = min(data), max(data)
     rng = mx - mn if mx != mn else 1.0
-    pad = 4
+    pad = 6  # top/bottom padding in SVG units
 
     n = len(data)
     pts: list[str] = []
@@ -360,6 +409,8 @@ def sparkline_img(data: List[float], color: str = "#10b981",
 
     points_str = " ".join(pts)
     grad_id    = f"sg{abs(hash(tuple(data))) % 100000}"
+
+    # polygon = filled area under the curve
     poly = f"0,{height} {points_str} {width},{height}"
 
     svg = (
@@ -372,9 +423,9 @@ def sparkline_img(data: List[float], color: str = "#10b981",
         f'</linearGradient></defs>'
         f'<polygon points="{poly}" fill="url(#{grad_id})"/>'
         f'<polyline points="{points_str}" fill="none" stroke="{color}" '
-        f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>'
+        f'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
         f'<circle cx="{pts[-1].split(",")[0]}" cy="{pts[-1].split(",")[1]}" '
-        f'r="3" fill="{color}"/>'
+        f'r="4" fill="{color}"/>'
         f'</svg>'
     )
 
@@ -394,6 +445,13 @@ def fmt_number(v: float) -> str:
         return f"{int(v):,}"
     return f"{v:,.1f}"
 
+def fmt_usage(v: float, uom: str = "") -> str:
+    """Format a usage value with optional unit-of-measure suffix."""
+    num = fmt_number(v)
+    if uom:
+        return f"{num} {uom}"
+    return num
+
 def fmt_pct(v: Optional[float]) -> str:
     if v is None:
         return "N/A"
@@ -405,6 +463,7 @@ def fmt_pct(v: Optional[float]) -> str:
 # 7.  RENDER FUNCTIONS  (native Streamlit components — no complex HTML)
 # =========================================================================
 
+# ── Utility-icon colors for the summary bar labels ──────────────────────
 UTILITY_COLORS = {
     "Water":    "#38bdf8",   # sky-400
     "Electric": "#facc15",   # yellow-400
@@ -413,18 +472,21 @@ UTILITY_COLORS = {
 }
 
 
-def render_summary_bar(df_full: pd.DataFrame, cards: List[PropertyCard]):
+def render_summary_bar(df_filtered: pd.DataFrame, cards: List[PropertyCard]):
     """Top-level KPI bar: overall counts + per-utility breakdowns.
 
-    Always receives the FULL (unfiltered) df so all four utilities
-    show totals even when a single utility is selected in the dropdown.
+    Displays one row of overall metrics (Properties, Active), then one
+    column per utility type (Water, Electric, Gas, Sewage) showing
+    Total Cost, Avg Monthly, Total Usage (with UOM).  If a utility has
+    no data in df_filtered the column shows zeroes — never crashes.
     """
 
-    util_col = detect_column(df_full, ["Utility"])
-    amt_col  = detect_column(df_full, ["$ Amount", "Amount", "Cost"])
-    use_col  = detect_column(df_full, ["Usage"])
+    # ── Column references ───────────────────────────────────────────────
+    util_col = detect_column(df_filtered, ["Utility"])
+    amt_col  = detect_column(df_filtered, ["$ Amount", "Amount", "Cost"])
+    use_col  = detect_column(df_filtered, ["Usage"])
 
-    # ── Overall counts ──────────────────────────────────────────────────
+    # ── Overall counts row ──────────────────────────────────────────────
     total_props  = len(cards)
     active_count = sum(1 for c in cards if c.status == "Active")
 
@@ -432,14 +494,15 @@ def render_summary_bar(df_full: pd.DataFrame, cards: List[PropertyCard]):
     ov1.metric("Properties", total_props)
     ov2.metric("Active", active_count)
 
-    st.markdown("")
+    st.markdown("")  # tiny spacer
 
-    # ── Per-utility KPI columns ─────────────────────────────────────────
+    # ── Per-utility KPI row ─────────────────────────────────────────────
     UTILITY_TYPES = ["Water", "Electric", "Gas", "Sewage"]
     cols = st.columns(len(UTILITY_TYPES))
 
     for col, utype in zip(cols, UTILITY_TYPES):
         with col:
+            # Label with color dot
             dot_color = UTILITY_COLORS.get(utype, "#94a3b8")
             st.markdown(
                 f'<span style="display:inline-flex;align-items:center;gap:6px;">'
@@ -450,53 +513,67 @@ def render_summary_bar(df_full: pd.DataFrame, cards: List[PropertyCard]):
                 unsafe_allow_html=True,
             )
 
+            # Filter to this utility
             total_cost  = 0.0
             avg_monthly = 0.0
             total_usage = 0.0
 
             try:
                 if util_col and amt_col:
-                    udf = df_full[
-                        df_full[util_col]
+                    udf = df_filtered[
+                        df_filtered[util_col]
                         .str.strip()
                         .str.lower()
                         == utype.lower()
                     ]
                     if not udf.empty:
+                        # Total cost
                         cost_vals = pd.to_numeric(udf[amt_col], errors="coerce")
                         total_cost = float(cost_vals.sum())
 
+                        # Total usage
                         if use_col and use_col in udf.columns:
                             usage_vals = pd.to_numeric(udf[use_col], errors="coerce")
                             total_usage = float(usage_vals.sum())
 
+                        # Avg monthly = total cost / distinct billing months
                         if "Year" in udf.columns and "Month_Num" in udf.columns:
                             tmp = udf.dropna(subset=["Year", "Month_Num"])
-                            n_months = len(
-                                tmp.drop_duplicates(subset=["Year", "Month_Num"])
-                            )
+                            n_months = tmp.groupby(["Year", "Month_Num"]).ngroup().nunique()
+                            if n_months == 0:
+                                n_months = len(
+                                    tmp.drop_duplicates(subset=["Year", "Month_Num"])
+                                )
                             n_months = max(n_months, 1)
                         else:
                             n_months = max(len(udf), 1)
                         avg_monthly = total_cost / n_months
             except Exception:
+                # safety net — show zeroes rather than crash
                 total_cost  = 0.0
                 avg_monthly = 0.0
                 total_usage = 0.0
 
+            # UOM for this utility type
+            uom = UTILITY_UOM.get(utype.lower(), "")
+
             st.metric("Total Cost",  fmt_dollar(total_cost))
             st.metric("Avg Monthly", fmt_dollar(avg_monthly))
-            st.metric("Total Usage", fmt_number(total_usage))
+            st.metric("Total Usage", fmt_usage(total_usage, uom))
 
 
 def render_property_card(card: PropertyCard):
+    """Single property card using native Streamlit components + dark CSS."""
+
+    # ── outer container ─────────────────────────────────────────────────
     with st.container(border=True):
 
+        # ── Header row: property name + status badge ────────────────────
         hdr_left, hdr_right = st.columns([4, 1])
         with hdr_left:
             st.subheader(card.name)
         with hdr_right:
-            badge_bg = card.status_color + "22"
+            badge_bg = card.status_color + "22"   # ~13 % opacity
             badge_html = (
                 f'<div style="text-align:right;padding-top:8px;">'
                 f'<span style="display:inline-flex;align-items:center;gap:6px;'
@@ -508,13 +585,15 @@ def render_property_card(card: PropertyCard):
             )
             st.markdown(badge_html, unsafe_allow_html=True)
 
+        # ── KPI row ────────────────────────────────────────────────────
         k1, k2, k3, k4 = st.columns(4)
+
         with k1:
             st.metric("Total Cost", fmt_dollar(card.total_cost))
         with k2:
             st.metric("Avg Monthly", fmt_dollar(card.avg_monthly))
         with k3:
-            st.metric("Total Usage", fmt_number(card.total_usage))
+            st.metric("Total Usage", fmt_usage(card.total_usage, card.uom))
         with k4:
             if card.yoy_change is not None:
                 arrow = "▲" if card.yoy_change > 0 else "▼"
@@ -523,13 +602,16 @@ def render_property_card(card: PropertyCard):
             else:
                 st.metric("YoY Change", "N/A")
 
+        # ── Sparkline ──────────────────────────────────────────────────
         spark = sparkline_img(card.value_history, card.sparkline_color)
         if spark:
             st.caption("Monthly Cost Trend")
             st.markdown(spark, unsafe_allow_html=True)
 
+        # ── Footer ─────────────────────────────────────────────────────
         st.caption(f"Last Billed: {card.last_billing}")
 
+        # ── Nav button (inside card) ───────────────────────────────────
         if st.button("View Full Details →", key=f"nav_{card.name}"):
             st.session_state["selected_property"] = card.name
             st.switch_page("pages/3_Property_Detail.py")
@@ -542,6 +624,7 @@ def render_property_card(card: PropertyCard):
 def main():
     st.set_page_config(page_title="Property Portfolio", layout="wide")
 
+    # ── Inject dark-card CSS FIRST ──────────────────────────────────────
     st.markdown(DARK_CARD_CSS, unsafe_allow_html=True)
 
     st.markdown(
@@ -552,13 +635,16 @@ def main():
         unsafe_allow_html=True,
     )
 
+    # ── load data ───────────────────────────────────────────────────────
     df, last_updated = load_data()
     if df is None or df.empty:
         st.warning("No data available. Check the Google Sheet connection.")
         return
 
+    # guarantee Year / Month_Num exist
     df = ensure_year_month(df)
 
+    # ── column references ───────────────────────────────────────────────
     prop_col = detect_column(df, ["Property Name", "Property"])
     util_col = detect_column(df, ["Utility"])
 
@@ -566,13 +652,16 @@ def main():
         st.error("Cannot find a 'Property Name' column in the data.")
         return
 
+    # ── FILTERS  (side by side) ─────────────────────────────────────────
     fcol1, fcol2 = st.columns(2)
 
+    # ── Utility Type dropdown (hardcoded options) ───────────────────────
     UTILITY_OPTIONS = ["Select All", "Water", "Electric", "Gas", "Sewage"]
 
     with fcol1:
         sel_utility = st.selectbox("Utility Type", UTILITY_OPTIONS, index=0)
 
+    # apply utility filter (case-insensitive)
     df_filtered = df.copy()
     if sel_utility != "Select All" and util_col:
         df_filtered = df_filtered[
@@ -580,6 +669,7 @@ def main():
             == sel_utility.strip().lower()
         ]
 
+    # Property dropdown (repopulates based on utility filter)
     properties = sorted(df_filtered[prop_col].dropna().unique().tolist())
     if not properties:
         with fcol2:
@@ -590,13 +680,17 @@ def main():
     with fcol2:
         sel_property = st.selectbox("Select Property", properties, index=0)
 
+    # ── BUILD CARDS  (all properties in filtered set, for summary bar) ──
     all_cards = build_portfolio(df_filtered)
 
-    # ── SUMMARY BAR — always uses full df for per-utility totals ────────
+    # ── SUMMARY BAR  (per-utility KPI breakdown) ────────────────────────
+    # Always pass the FULL (unfiltered) df so all four utilities
+    # show totals even when a single utility is selected in the dropdown.
     st.markdown("---")
     render_summary_bar(df, all_cards)
     st.markdown("---")
 
+    # ── SINGLE CARD for selected property ───────────────────────────────
     selected_card = next((c for c in all_cards if c.name == sel_property), None)
 
     if selected_card:
@@ -604,6 +698,7 @@ def main():
     else:
         st.warning(f"No data found for **{sel_property}**.")
 
+    # ── footer ──────────────────────────────────────────────────────────
     if last_updated:
         st.caption(f"Data last updated: {last_updated}")
 
