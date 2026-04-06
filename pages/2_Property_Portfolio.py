@@ -1,7 +1,7 @@
 """
 IRC-Dashboard  –  pages/2_Property_Portfolio.py
 Property Portfolio: dropdown-driven single-card view with utility filter,
-summary KPI bar, SVG sparkline (base64-encoded), and nav to detail page.
+per-utility summary KPI bar, SVG sparkline (base64-encoded), and nav to detail page.
 
 DARK-THEMED CARDS  –  CSS injection on native Streamlit components.
 Safe imports only (streamlit, pandas, numpy, base64, dataclasses, typing, datetime).
@@ -307,7 +307,6 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                 if not tmp2.empty:
                     last_year_val  = tmp2["Year"].max()
                     last_month_val = tmp2["Month_Num"].max()
-
                     if not pd.isna(last_year_val) and not pd.isna(last_month_val):
                         ly = int(last_year_val)
                         lm = int(last_month_val)
@@ -345,7 +344,6 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
 
 def sparkline_img(data: List[float], color: str = "#10b981",
                   width: int = 200, height: int = 48) -> str:
-    """Return an <img> tag containing a base64-encoded SVG sparkline."""
     if not data or len(data) < 2:
         return ""
 
@@ -362,7 +360,6 @@ def sparkline_img(data: List[float], color: str = "#10b981",
 
     points_str = " ".join(pts)
     grad_id    = f"sg{abs(hash(tuple(data))) % 100000}"
-
     poly = f"0,{height} {points_str} {width},{height}"
 
     svg = (
@@ -408,25 +405,91 @@ def fmt_pct(v: Optional[float]) -> str:
 # 7.  RENDER FUNCTIONS  (native Streamlit components — no complex HTML)
 # =========================================================================
 
-def render_summary_bar(cards: List[PropertyCard]):
-    """Top-level KPI bar aggregated across the visible card list."""
+UTILITY_COLORS = {
+    "Water":    "#38bdf8",   # sky-400
+    "Electric": "#facc15",   # yellow-400
+    "Gas":      "#fb923c",   # orange-400
+    "Sewage":   "#a78bfa",   # violet-400
+}
+
+
+def render_summary_bar(df_full: pd.DataFrame, cards: List[PropertyCard]):
+    """Top-level KPI bar: overall counts + per-utility breakdowns.
+
+    Always receives the FULL (unfiltered) df so all four utilities
+    show totals even when a single utility is selected in the dropdown.
+    """
+
+    util_col = detect_column(df_full, ["Utility"])
+    amt_col  = detect_column(df_full, ["$ Amount", "Amount", "Cost"])
+    use_col  = detect_column(df_full, ["Usage"])
+
+    # ── Overall counts ──────────────────────────────────────────────────
     total_props  = len(cards)
     active_count = sum(1 for c in cards if c.status == "Active")
-    total_cost   = sum(c.total_cost for c in cards)
-    avg_monthly  = np.mean([c.avg_monthly for c in cards]) if cards else 0
-    total_usage  = sum(c.total_usage for c in cards)
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Properties", total_props)
-    c2.metric("Active", active_count)
-    c3.metric("Total Cost", fmt_dollar(total_cost))
-    c4.metric("Avg Monthly", fmt_dollar(avg_monthly))
-    c5.metric("Total Usage", fmt_number(total_usage))
+    ov1, ov2 = st.columns(2)
+    ov1.metric("Properties", total_props)
+    ov2.metric("Active", active_count)
+
+    st.markdown("")
+
+    # ── Per-utility KPI columns ─────────────────────────────────────────
+    UTILITY_TYPES = ["Water", "Electric", "Gas", "Sewage"]
+    cols = st.columns(len(UTILITY_TYPES))
+
+    for col, utype in zip(cols, UTILITY_TYPES):
+        with col:
+            dot_color = UTILITY_COLORS.get(utype, "#94a3b8")
+            st.markdown(
+                f'<span style="display:inline-flex;align-items:center;gap:6px;">'
+                f'<span style="width:10px;height:10px;border-radius:50%;'
+                f'background:{dot_color};display:inline-block;"></span>'
+                f'<span style="font-weight:700;font-size:1rem;color:#f1f5f9;">'
+                f'{utype}</span></span>',
+                unsafe_allow_html=True,
+            )
+
+            total_cost  = 0.0
+            avg_monthly = 0.0
+            total_usage = 0.0
+
+            try:
+                if util_col and amt_col:
+                    udf = df_full[
+                        df_full[util_col]
+                        .str.strip()
+                        .str.lower()
+                        == utype.lower()
+                    ]
+                    if not udf.empty:
+                        cost_vals = pd.to_numeric(udf[amt_col], errors="coerce")
+                        total_cost = float(cost_vals.sum())
+
+                        if use_col and use_col in udf.columns:
+                            usage_vals = pd.to_numeric(udf[use_col], errors="coerce")
+                            total_usage = float(usage_vals.sum())
+
+                        if "Year" in udf.columns and "Month_Num" in udf.columns:
+                            tmp = udf.dropna(subset=["Year", "Month_Num"])
+                            n_months = len(
+                                tmp.drop_duplicates(subset=["Year", "Month_Num"])
+                            )
+                            n_months = max(n_months, 1)
+                        else:
+                            n_months = max(len(udf), 1)
+                        avg_monthly = total_cost / n_months
+            except Exception:
+                total_cost  = 0.0
+                avg_monthly = 0.0
+                total_usage = 0.0
+
+            st.metric("Total Cost",  fmt_dollar(total_cost))
+            st.metric("Avg Monthly", fmt_dollar(avg_monthly))
+            st.metric("Total Usage", fmt_number(total_usage))
 
 
 def render_property_card(card: PropertyCard):
-    """Single property card using native Streamlit components + dark CSS."""
-
     with st.container(border=True):
 
         hdr_left, hdr_right = st.columns([4, 1])
@@ -446,7 +509,6 @@ def render_property_card(card: PropertyCard):
             st.markdown(badge_html, unsafe_allow_html=True)
 
         k1, k2, k3, k4 = st.columns(4)
-
         with k1:
             st.metric("Total Cost", fmt_dollar(card.total_cost))
         with k2:
@@ -480,7 +542,6 @@ def render_property_card(card: PropertyCard):
 def main():
     st.set_page_config(page_title="Property Portfolio", layout="wide")
 
-    # ── Inject dark-card CSS FIRST ──────────────────────────────────────
     st.markdown(DARK_CARD_CSS, unsafe_allow_html=True)
 
     st.markdown(
@@ -531,8 +592,9 @@ def main():
 
     all_cards = build_portfolio(df_filtered)
 
+    # ── SUMMARY BAR — always uses full df for per-utility totals ────────
     st.markdown("---")
-    render_summary_bar(all_cards)
+    render_summary_bar(df, all_cards)
     st.markdown("---")
 
     selected_card = next((c for c in all_cards if c.name == sel_property), None)
