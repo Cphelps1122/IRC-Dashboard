@@ -3,6 +3,7 @@ IRC-Dashboard  –  pages/2_Property_Portfolio.py
 Property Portfolio: dropdown-driven single-card view with utility filter,
 summary KPI bar, SVG sparkline (base64-encoded), and nav to detail page.
 
+DARK-THEMED CARDS  –  CSS injection on native Streamlit components.
 Safe imports only (streamlit, pandas, numpy, base64, dataclasses, typing, datetime).
 NO matplotlib.
 """
@@ -17,6 +18,123 @@ from datetime import datetime
 
 # ── data loader (same one used by other pages) ──────────────────────────
 from utils.load_data import load_data
+
+# =========================================================================
+# 0.  DARK-CARD CSS  (injected once at top of page)
+# =========================================================================
+
+DARK_CARD_CSS = """
+<style>
+/* ── Dark card container ────────────────────────────────────────────── */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important;
+    border: 1px solid #334155 !important;
+    border-radius: 14px !important;
+    padding: 4px !important;
+    box-shadow: 0 4px 24px rgba(0,0,0,.35) !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] > div {
+    background: transparent !important;
+}
+
+/* ── Metric values → white ──────────────────────────────────────────── */
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricValue"] {
+    color: #f1f5f9 !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricValue"] > div {
+    color: #f1f5f9 !important;
+}
+
+/* ── Metric labels → slate-400 ──────────────────────────────────────── */
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricLabel"] {
+    color: #94a3b8 !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricLabel"] p,
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricLabel"] label,
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stMetricLabel"] div {
+    color: #94a3b8 !important;
+}
+
+/* ── Subheader (property name) → white ──────────────────────────────── */
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stSubheader"],
+div[data-testid="stVerticalBlockBorderWrapper"] h3,
+div[data-testid="stVerticalBlockBorderWrapper"] h2 {
+    color: #f1f5f9 !important;
+}
+
+/* ── Captions → slate-400 ───────────────────────────────────────────── */
+div[data-testid="stVerticalBlockBorderWrapper"] .stCaption,
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"],
+div[data-testid="stVerticalBlockBorderWrapper"] [data-testid="stCaptionContainer"] p,
+div[data-testid="stVerticalBlockBorderWrapper"] small {
+    color: #94a3b8 !important;
+}
+
+/* ── Summary KPI bar → dark slate bg ────────────────────────────────── */
+div[data-testid="stHorizontalBlock"] [data-testid="stMetricValue"] {
+    font-weight: 700;
+}
+
+/* ── Page background alignment ──────────────────────────────────────── */
+section[data-testid="stMain"] {
+    background-color: #0b1120 !important;
+}
+section[data-testid="stMain"] > div {
+    background-color: #0b1120 !important;
+}
+header[data-testid="stHeader"] {
+    background-color: #0b1120 !important;
+}
+
+/* ── Page-level text colors ─────────────────────────────────────────── */
+section[data-testid="stMain"] h1,
+section[data-testid="stMain"] h2,
+section[data-testid="stMain"] h3 {
+    color: #f1f5f9 !important;
+}
+section[data-testid="stMain"] p,
+section[data-testid="stMain"] span,
+section[data-testid="stMain"] label {
+    color: #cbd5e1 !important;
+}
+section[data-testid="stMain"] hr {
+    border-color: #1e293b !important;
+}
+
+/* ── Selectbox / dropdown dark styling ──────────────────────────────── */
+section[data-testid="stMain"] [data-testid="stSelectbox"] label {
+    color: #94a3b8 !important;
+}
+
+/* ── Button styling ─────────────────────────────────────────────────── */
+div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button {
+    background: linear-gradient(135deg, #334155, #1e293b) !important;
+    color: #f1f5f9 !important;
+    border: 1px solid #475569 !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] .stButton > button:hover {
+    background: linear-gradient(135deg, #475569, #334155) !important;
+    border-color: #64748b !important;
+    box-shadow: 0 2px 12px rgba(100,116,139,.3) !important;
+}
+
+/* ── Summary-bar metrics (outside cards) → light ────────────────────── */
+section[data-testid="stMain"] [data-testid="stMetricValue"] {
+    color: #f1f5f9 !important;
+}
+section[data-testid="stMain"] [data-testid="stMetricValue"] > div {
+    color: #f1f5f9 !important;
+}
+section[data-testid="stMain"] [data-testid="stMetricLabel"] p,
+section[data-testid="stMain"] [data-testid="stMetricLabel"] div {
+    color: #94a3b8 !important;
+}
+</style>
+"""
+
 
 # =========================================================================
 # 1.  COLUMN DETECTION  (case-insensitive, first-match)
@@ -61,7 +179,6 @@ def _parse_month(val) -> Optional[int]:
     """Convert any reasonable month representation to 1-12 or None."""
     if val is None or (isinstance(val, float) and np.isnan(val)):
         return None
-    # already numeric
     if isinstance(val, (int, float)):
         v = int(val)
         return v if 1 <= v <= 12 else None
@@ -82,19 +199,16 @@ def ensure_year_month(df: pd.DataFrame) -> pd.DataFrame:
     has_year  = False
     has_month = False
 
-    # ── Year ────────────────────────────────────────────────────────────
     if year_col:
         df["Year"] = pd.to_numeric(df[year_col], errors="coerce")
         if df["Year"].notna().any():
             has_year = True
 
-    # ── Month_Num ───────────────────────────────────────────────────────
     if month_col:
         df["Month_Num"] = df[month_col].apply(_parse_month)
         if df["Month_Num"].notna().any():
             has_month = True
 
-    # ── Billing Date fallback ───────────────────────────────────────────
     if bill_col and (not has_year or not has_month):
         bd = pd.to_datetime(df[bill_col], errors="coerce")
         if not has_year:
@@ -102,7 +216,6 @@ def ensure_year_month(df: pd.DataFrame) -> pd.DataFrame:
         if not has_month:
             df["Month_Num"] = bd.dt.month
 
-    # Final safety: ensure columns exist even if all NaN
     if "Year" not in df.columns:
         df["Year"] = np.nan
     if "Month_Num" not in df.columns:
@@ -121,12 +234,12 @@ class PropertyCard:
     total_cost: float = 0.0
     avg_monthly: float = 0.0
     total_usage: float = 0.0
-    yoy_change: Optional[float] = None        # percent
-    status: str = "Inactive"                   # Active / Inactive
+    yoy_change: Optional[float] = None
+    status: str = "Inactive"
     last_billing: str = "N/A"
     value_history: List[float] = field(default_factory=list)
-    sparkline_color: str = "#10b981"           # green
-    status_color: str = "#ef4444"              # red
+    sparkline_color: str = "#10b981"
+    status_color: str = "#ef4444"
 
 
 # =========================================================================
@@ -152,17 +265,14 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
         try:
             card = PropertyCard(name=str(name))
 
-            # ── Total cost ──────────────────────────────────────────────
             if amt_col and amt_col in grp.columns:
                 vals = pd.to_numeric(grp[amt_col], errors="coerce")
                 card.total_cost = float(vals.sum())
 
-            # ── Total usage ─────────────────────────────────────────────
             if use_col and use_col in grp.columns:
                 vals = pd.to_numeric(grp[use_col], errors="coerce")
                 card.total_usage = float(vals.sum())
 
-            # ── Monthly cost history (for sparkline + avg) ──────────────
             if amt_col and "Year" in grp.columns and "Month_Num" in grp.columns:
                 tmp = grp.dropna(subset=["Year", "Month_Num"]).copy()
                 if not tmp.empty:
@@ -175,11 +285,9 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                     )
                     card.value_history = monthly["_amt"].tolist()
 
-            # ── Avg monthly ─────────────────────────────────────────────
             n_months = len(card.value_history) if card.value_history else 1
             card.avg_monthly = card.total_cost / max(n_months, 1)
 
-            # ── YoY change ──────────────────────────────────────────────
             if amt_col and "Year" in grp.columns:
                 yr_totals = (
                     grp.assign(_amt=pd.to_numeric(grp[amt_col], errors="coerce"))
@@ -194,7 +302,6 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                     if prev and prev != 0:
                         card.yoy_change = ((curr - prev) / abs(prev)) * 100
 
-            # ── Status (active if billed within last 3 months) ──────────
             if "Year" in grp.columns and "Month_Num" in grp.columns:
                 tmp2 = grp.dropna(subset=["Year", "Month_Num"])
                 if not tmp2.empty:
@@ -208,13 +315,11 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                         if months_since <= 3:
                             card.status = "Active"
 
-            # ── Last billing date ───────────────────────────────────────
             if bill_col and bill_col in grp.columns:
                 dates = pd.to_datetime(grp[bill_col], errors="coerce").dropna()
                 if not dates.empty:
                     card.last_billing = dates.max().strftime("%b %d, %Y")
 
-            # ── Colors ──────────────────────────────────────────────────
             if card.status == "Active":
                 card.status_color   = "#10b981"
                 card.sparkline_color = "#10b981"
@@ -223,15 +328,13 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                 card.sparkline_color = "#f87171"
 
             if card.yoy_change is not None and card.yoy_change > 0:
-                card.sparkline_color = "#f87171"   # red = costs up
+                card.sparkline_color = "#f87171"
 
             cards.append(card)
 
         except Exception:
-            # never let one bad property crash the whole page
             continue
 
-    # sort: Active first, then alphabetical
     cards.sort(key=lambda c: (0 if c.status == "Active" else 1, c.name))
     return cards
 
@@ -248,7 +351,7 @@ def sparkline_img(data: List[float], color: str = "#10b981",
 
     mn, mx = min(data), max(data)
     rng = mx - mn if mx != mn else 1.0
-    pad = 4  # top/bottom padding in SVG units
+    pad = 4
 
     n = len(data)
     pts: list[str] = []
@@ -260,7 +363,6 @@ def sparkline_img(data: List[float], color: str = "#10b981",
     points_str = " ".join(pts)
     grad_id    = f"sg{abs(hash(tuple(data))) % 100000}"
 
-    # polygon = filled area under the curve
     poly = f"0,{height} {points_str} {width},{height}"
 
     svg = (
@@ -323,17 +425,15 @@ def render_summary_bar(cards: List[PropertyCard]):
 
 
 def render_property_card(card: PropertyCard):
-    """Single property card using native Streamlit components."""
+    """Single property card using native Streamlit components + dark CSS."""
 
-    # ── outer container ─────────────────────────────────────────────────
     with st.container(border=True):
 
-        # ── Header row: property name + status badge ────────────────────
         hdr_left, hdr_right = st.columns([4, 1])
         with hdr_left:
             st.subheader(card.name)
         with hdr_right:
-            badge_bg = card.status_color + "22"   # ~13 % opacity
+            badge_bg = card.status_color + "22"
             badge_html = (
                 f'<div style="text-align:right;padding-top:8px;">'
                 f'<span style="display:inline-flex;align-items:center;gap:6px;'
@@ -345,7 +445,6 @@ def render_property_card(card: PropertyCard):
             )
             st.markdown(badge_html, unsafe_allow_html=True)
 
-        # ── KPI row ────────────────────────────────────────────────────
         k1, k2, k3, k4 = st.columns(4)
 
         with k1:
@@ -362,14 +461,16 @@ def render_property_card(card: PropertyCard):
             else:
                 st.metric("YoY Change", "N/A")
 
-        # ── Sparkline ──────────────────────────────────────────────────
         spark = sparkline_img(card.value_history, card.sparkline_color)
         if spark:
             st.caption("Monthly Cost Trend")
             st.markdown(spark, unsafe_allow_html=True)
 
-        # ── Footer ─────────────────────────────────────────────────────
         st.caption(f"Last Billed: {card.last_billing}")
+
+        if st.button("View Full Details →", key=f"nav_{card.name}"):
+            st.session_state["selected_property"] = card.name
+            st.switch_page("pages/3_Property_Detail.py")
 
 
 # =========================================================================
@@ -379,23 +480,24 @@ def render_property_card(card: PropertyCard):
 def main():
     st.set_page_config(page_title="Property Portfolio", layout="wide")
 
+    # ── Inject dark-card CSS FIRST ──────────────────────────────────────
+    st.markdown(DARK_CARD_CSS, unsafe_allow_html=True)
+
     st.markdown(
-        "<h1 style='text-align:center;margin-bottom:.2rem;'>Property Portfolio</h1>"
+        "<h1 style='text-align:center;margin-bottom:.2rem;color:#f1f5f9;'>"
+        "Property Portfolio</h1>"
         "<p style='text-align:center;color:#64748b;margin-top:0;'>"
         "Select a property to view its performance card.</p>",
         unsafe_allow_html=True,
     )
 
-    # ── load data ───────────────────────────────────────────────────────
     df, last_updated = load_data()
     if df is None or df.empty:
         st.warning("No data available. Check the Google Sheet connection.")
         return
 
-    # guarantee Year / Month_Num exist
     df = ensure_year_month(df)
 
-    # ── column references ───────────────────────────────────────────────
     prop_col = detect_column(df, ["Property Name", "Property"])
     util_col = detect_column(df, ["Utility"])
 
@@ -403,16 +505,13 @@ def main():
         st.error("Cannot find a 'Property Name' column in the data.")
         return
 
-    # ── FILTERS  (side by side) ─────────────────────────────────────────
     fcol1, fcol2 = st.columns(2)
 
-    # ── Utility Type dropdown (hardcoded options) ───────────────────────
     UTILITY_OPTIONS = ["Select All", "Water", "Electric", "Gas", "Sewage"]
 
     with fcol1:
         sel_utility = st.selectbox("Utility Type", UTILITY_OPTIONS, index=0)
 
-    # apply utility filter (case-insensitive)
     df_filtered = df.copy()
     if sel_utility != "Select All" and util_col:
         df_filtered = df_filtered[
@@ -420,7 +519,6 @@ def main():
             == sel_utility.strip().lower()
         ]
 
-    # Property dropdown (repopulates based on utility filter)
     properties = sorted(df_filtered[prop_col].dropna().unique().tolist())
     if not properties:
         with fcol2:
@@ -431,30 +529,19 @@ def main():
     with fcol2:
         sel_property = st.selectbox("Select Property", properties, index=0)
 
-    # ── BUILD CARDS  (all properties in filtered set, for summary bar) ──
     all_cards = build_portfolio(df_filtered)
 
-    # ── SUMMARY BAR ─────────────────────────────────────────────────────
     st.markdown("---")
     render_summary_bar(all_cards)
     st.markdown("---")
 
-    # ── SINGLE CARD for selected property ───────────────────────────────
     selected_card = next((c for c in all_cards if c.name == sel_property), None)
 
     if selected_card:
         render_property_card(selected_card)
-
-        # Nav button
-        st.markdown("<div style='text-align:center;margin-top:6px;'>", unsafe_allow_html=True)
-        if st.button("View Full Details →", key="nav_detail"):
-            st.session_state["selected_property"] = selected_card.name
-            st.switch_page("pages/3_Property_Detail.py")
-        st.markdown("</div>", unsafe_allow_html=True)
     else:
         st.warning(f"No data found for **{sel_property}**.")
 
-    # ── footer ──────────────────────────────────────────────────────────
     if last_updated:
         st.caption(f"Data last updated: {last_updated}")
 
