@@ -144,7 +144,7 @@ UTILITY_UOM = {
     "water":    "Gal",
     "electric": "kWh",
     "gas":      "Therms",
-    "sewage":   "Gal",
+    "trash":    "Gal",
 }
 
 
@@ -468,7 +468,7 @@ UTILITY_COLORS = {
     "Water":    "#38bdf8",   # sky-400
     "Electric": "#facc15",   # yellow-400
     "Gas":      "#fb923c",   # orange-400
-    "Sewage":   "#a78bfa",   # violet-400
+    "Trash":    "#a78bfa",   # violet-400
 }
 
 
@@ -476,7 +476,7 @@ def render_summary_bar(df_filtered: pd.DataFrame, cards: List[PropertyCard]):
     """Top-level KPI bar: overall counts + per-utility breakdowns.
 
     Displays one row of overall metrics (Properties, Active), then one
-    column per utility type (Water, Electric, Gas, Sewage) showing
+    column per utility type (Water, Electric, Gas, Trash) showing
     Total Cost, Avg Monthly, Total Usage (with UOM).  If a utility has
     no data in df_filtered the column shows zeroes — never crashes.
     """
@@ -497,7 +497,7 @@ def render_summary_bar(df_filtered: pd.DataFrame, cards: List[PropertyCard]):
     st.markdown("")  # tiny spacer
 
     # ── Per-utility KPI row ─────────────────────────────────────────────
-    UTILITY_TYPES = ["Water", "Electric", "Gas", "Sewage"]
+    UTILITY_TYPES = ["Water", "Electric", "Gas", "Trash"]
     cols = st.columns(len(UTILITY_TYPES))
 
     for col, utype in zip(cols, UTILITY_TYPES):
@@ -677,7 +677,7 @@ def main():
     fcol1, fcol2 = st.columns(2)
 
     # ── Utility Type dropdown (hardcoded options) ───────────────────────
-    UTILITY_OPTIONS = ["Select All", "Water", "Electric", "Gas", "Sewage"]
+    UTILITY_OPTIONS = ["Select All", "Water", "Electric", "Gas", "Trash"]
 
     with fcol1:
         sel_utility = st.selectbox("Utility Type", UTILITY_OPTIONS, index=0)
@@ -726,4 +726,3 @@ def main():
 
 # ── entry point ─────────────────────────────────────────────────────────
 main()
-
