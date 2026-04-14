@@ -18,6 +18,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from utils.load_data import load_data
+from auth import require_auth
 
 # =========================================================================
 # 0.  DARK-CARD CSS
@@ -216,7 +217,7 @@ class PropertyCard:
     total_cost: float = 0.0
     avg_monthly: float = 0.0
     total_usage: float = 0.0
-    mom_change: Optional[float] = None        # month-over-month percent
+    mom_change: Optional[float] = None
     status: str = "Inactive"
     last_billing: str = "N/A"
     value_history: List[float] = field(default_factory=list)
@@ -260,7 +261,6 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                 vals = pd.to_numeric(grp[use_col], errors="coerce")
                 card.total_usage = float(vals.sum())
 
-            # ── Monthly cost history (for chart + avg + MoM) ────────────
             if amt_col and "Year" in grp.columns and "Month_Num" in grp.columns:
                 tmp = grp.dropna(subset=["Year", "Month_Num"]).copy()
                 if not tmp.empty:
@@ -274,7 +274,6 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
                     card.value_history = monthly["_amt"].tolist()
                     card.month_labels  = monthly["Month_Num"].astype(int).tolist()
 
-                    # ── Month-over-Month change ─────────────────────────
                     if len(card.value_history) >= 2:
                         prev_val = card.value_history[-2]
                         curr_val = card.value_history[-1]
@@ -284,7 +283,6 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
             n_months = len(card.value_history) if card.value_history else 1
             card.avg_monthly = card.total_cost / max(n_months, 1)
 
-            # ── Status (active if billed within last 3 months) ──────────
             if "Year" in grp.columns and "Month_Num" in grp.columns:
                 tmp2 = grp.dropna(subset=["Year", "Month_Num"])
                 if not tmp2.empty:
@@ -321,7 +319,7 @@ def build_portfolio(df: pd.DataFrame) -> List[PropertyCard]:
 
 
 # =========================================================================
-# 5.  SVG CHART WITH AXES  (base64 <img> — Streamlit-safe)
+# 5.  SVG CHART WITH AXES
 # =========================================================================
 
 MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
@@ -329,7 +327,6 @@ MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun",
 
 
 def _nice_ticks(max_val: float, num_ticks: int = 5) -> List[float]:
-    """Generate clean round Y-axis tick values from 0 to max_val."""
     if max_val <= 0:
         return [0]
     raw_step = max_val / num_ticks
@@ -354,7 +351,6 @@ def _nice_ticks(max_val: float, num_ticks: int = 5) -> List[float]:
 
 
 def _fmt_axis_dollar(v: float) -> str:
-    """Short dollar format for axis labels."""
     if v >= 1_000_000:
         return f"${v/1_000_000:.1f}M"
     if v >= 1_000:
@@ -366,23 +362,18 @@ def _fmt_axis_dollar(v: float) -> str:
 
 def chart_img(data: List[float], months: List[int],
               color: str = "#10b981") -> str:
-    """Full SVG chart with Y-axis (cost from $0) and X-axis (Jan-Dec).
-    Returns a base64-encoded <img> tag."""
-
     if not data or len(data) < 1:
         return ""
 
-    # ── Chart dimensions ────────────────────────────────────────────────
     total_w   = 560
     total_h   = 200
-    margin_l  = 60       # left margin for Y-axis labels
+    margin_l  = 60
     margin_r  = 15
     margin_t  = 15
-    margin_b  = 30       # bottom margin for X-axis labels
+    margin_b  = 30
     chart_w   = total_w - margin_l - margin_r
     chart_h   = total_h - margin_t - margin_b
 
-    # ── Y-axis scale (always starts at 0) ───────────────────────────────
     max_val = max(data) if data else 0
     if max_val <= 0:
         max_val = 100
@@ -392,17 +383,13 @@ def chart_img(data: List[float], months: List[int],
     def to_y(v: float) -> float:
         return margin_t + chart_h - (v / y_max * chart_h) if y_max > 0 else margin_t + chart_h
 
-    # ── X positions: one slot per month (Jan=1 .. Dec=12) ───────────────
-    # Build a dict of month_num → cost for the data we have
     month_cost = {}
     for m, v in zip(months, data):
         month_cost[m] = month_cost.get(m, 0) + v
 
-    # X positions for all 12 months
     def to_x(month_num: int) -> float:
         return margin_l + (month_num - 1) / 11 * chart_w
 
-    # ── Build SVG ───────────────────────────────────────────────────────
     parts: list[str] = []
     parts.append(
         f'<svg viewBox="0 0 {total_w} {total_h}" '
@@ -411,7 +398,6 @@ def chart_img(data: List[float], months: List[int],
         f'font-family:sans-serif;">'
     )
 
-    # ── Gradient definition ─────────────────────────────────────────────
     grad_id = f"cg{abs(hash(tuple(data))) % 100000}"
     parts.append(
         f'<defs><linearGradient id="{grad_id}" x1="0" y1="0" x2="0" y2="1">'
@@ -420,22 +406,18 @@ def chart_img(data: List[float], months: List[int],
         f'</linearGradient></defs>'
     )
 
-    # ── Y-axis gridlines + labels ───────────────────────────────────────
     for tick in y_ticks:
         y = round(to_y(tick), 1)
-        # gridline
         parts.append(
             f'<line x1="{margin_l}" y1="{y}" x2="{total_w - margin_r}" y2="{y}" '
             f'stroke="#334155" stroke-width="0.5" stroke-dasharray="3,3"/>'
         )
-        # label
         parts.append(
             f'<text x="{margin_l - 6}" y="{y + 4}" '
             f'text-anchor="end" fill="#94a3b8" font-size="10">'
             f'{_fmt_axis_dollar(tick)}</text>'
         )
 
-    # ── X-axis labels (all 12 months) ───────────────────────────────────
     for m in range(1, 13):
         x = round(to_x(m), 1)
         parts.append(
@@ -444,7 +426,6 @@ def chart_img(data: List[float], months: List[int],
             f'{MONTH_ABBR[m - 1]}</text>'
         )
 
-    # ── Plot line + fill (only months that have data) ───────────────────
     plot_months = sorted(month_cost.keys())
     if plot_months:
         pts_xy: list[tuple[float, float]] = []
@@ -455,7 +436,6 @@ def chart_img(data: List[float], months: List[int],
 
         pts_str = " ".join(f"{x},{y}" for x, y in pts_xy)
 
-        # filled area polygon
         bottom_y = round(to_y(0), 1)
         poly_pts = (
             f"{pts_xy[0][0]},{bottom_y} "
@@ -464,25 +444,20 @@ def chart_img(data: List[float], months: List[int],
         )
         parts.append(f'<polygon points="{poly_pts}" fill="url(#{grad_id})"/>')
 
-        # line
         parts.append(
             f'<polyline points="{pts_str}" fill="none" stroke="{color}" '
             f'stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'
         )
 
-        # dots at each data point
         for x, y in pts_xy:
             parts.append(f'<circle cx="{x}" cy="{y}" r="3.5" fill="{color}"/>')
 
-    # ── Axis lines ──────────────────────────────────────────────────────
     axis_y_bottom = round(to_y(0), 1)
-    # bottom axis
     parts.append(
         f'<line x1="{margin_l}" y1="{axis_y_bottom}" '
         f'x2="{total_w - margin_r}" y2="{axis_y_bottom}" '
         f'stroke="#475569" stroke-width="1"/>'
     )
-    # left axis
     parts.append(
         f'<line x1="{margin_l}" y1="{margin_t}" '
         f'x2="{margin_l}" y2="{axis_y_bottom}" '
@@ -639,7 +614,6 @@ def render_property_card(card: PropertyCard, selected_utility: str = "Select All
             )
             st.markdown(badge_html, unsafe_allow_html=True)
 
-        # ── KPI row ────────────────────────────────────────────────────
         k1, k2, k3, k4 = st.columns(4)
 
         with k1:
@@ -656,7 +630,6 @@ def render_property_card(card: PropertyCard, selected_utility: str = "Select All
             else:
                 st.metric("MoM Change", "N/A")
 
-        # ── Chart with axes ────────────────────────────────────────────
         chart = chart_img(card.value_history, card.month_labels, card.sparkline_color)
         if chart:
             st.caption("Monthly Cost Trend")
@@ -675,6 +648,7 @@ def render_property_card(card: PropertyCard, selected_utility: str = "Select All
 
 def main():
     st.set_page_config(page_title="Property Portfolio", layout="wide")
+    require_auth()
 
     st.markdown(DARK_CARD_CSS, unsafe_allow_html=True)
 
